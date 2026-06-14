@@ -805,6 +805,8 @@
           this.mouseSequenceStarted = false;
           this.wakeCatTried = false;
           this.inventoryText = null;
+          this.catWakeAttempts = 0;
+          this.hintTimerStarted = false;
 
           this.buildCollectibles();
           this.buildHintButton();
@@ -1287,7 +1289,7 @@
           });
 
           // Head of the mouse — deeper inside the ruins, a separate landmark
-          this.mouseHeadX = 1080;
+          this.mouseHeadX = this.treeX - 80;
           this.mouseHeadY = this.gY - 2;
           this.buildGlowMarker(this.mouseHeadX, this.mouseHeadY);
           this.mouseHeadBeacon = this.buildItemBeacon(
@@ -1518,6 +1520,27 @@
             if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
               this.collected[key] = true;
               this.collectedCount++;
+              if (
+                this.collectedCount >= 3 &&
+                !this.mousePuzzleSolved &&
+                !this.hintTimerStarted
+              ) {
+                this.hintTimerStarted = true;
+
+                this.time.delayedCall(20000, () => {
+                  if (this.collectedCount >= 3 && !this.mousePuzzleSolved) {
+                    this.hintBtn.setVisible(true);
+
+                    this.tweens.add({
+                      targets: this.hintBtn,
+                      alpha: { from: 0.4, to: 1 },
+                      duration: 1000,
+                      yoyo: true,
+                      repeat: -1,
+                    });
+                  }
+                });
+              }
               if (key === "battery") {
                 this.batteryG.setVisible(false);
                 this.batteryBeacon.setVisible(false);
@@ -1600,15 +1623,16 @@
           this.hintBtn = this.add
             .text(W - 20, 20, "? Hint", {
               fontFamily: "EB Garamond",
-              fontSize: "14px",
+              fontSize: "18px",
               color: "#7a8ea0",
               backgroundColor: "#00000099",
-              padding: { x: 10, y: 6 },
+              padding: { x: 12, y: 8 },
             })
             .setOrigin(1, 0)
             .setScrollFactor(0)
-            .setDepth(320)
-            .setInteractive({ useHandCursor: true });
+            .setDepth(700)
+            .setInteractive({ useHandCursor: true })
+            .setVisible(false);
 
           this.hintBtn.on("pointerover", () =>
             this.hintBtn.setColor("#ffffff"),
@@ -1623,15 +1647,15 @@
           if (this.triggered || this.puzzleOpen || this.mousePuzzleOpen) return;
 
           if (this.puzzleSolved) {
-            this.showHint("The way down is open.");
+            this.showHint("The city calls from below.", 3200);
           } else if (this.mousePuzzleSolved) {
             this.showHint(
               "The tree feels different now. Maybe it's worth a closer look.",
             );
           } else if (this.collectedCount >= 3) {
-            this.showHint("Go to the cat.");
+            this.showHint("Something near the tree still remembers.", 3400);
           } else if (this.collectedCount > 0) {
-            this.showHint("There may be more scattered pieces nearby.");
+            this.showHint("Fragments of a forgotten toy lie scattered.", 3600);
           } else {
             this.showHint("Something out here doesn't feel quite right.");
           }
@@ -1668,10 +1692,18 @@
         }
 
         // Queue-based subtitle system — only one hint visible at a time, prevents overlap
-        showHint(text) {
+        showHint(text, duration = null) {
           if (!this.hintQueue) this.hintQueue = [];
-          this.hintQueue.push(text);
-          if (!this.hintActive) this._playNextHint();
+
+          if (duration === null) {
+            duration = Math.max(2500, text.length * 65);
+          }
+
+          this.hintQueue.push({ text, duration });
+
+          if (!this.hintActive) {
+            this._playNextHint();
+          }
         }
 
         _playNextHint() {
@@ -1680,7 +1712,10 @@
             return;
           }
           this.hintActive = true;
-          let text = this.hintQueue.shift();
+          let hint = this.hintQueue.shift();
+
+          let text = hint.text;
+          let duration = hint.duration;
           let t = this.add
             .text(W / 2, H - 86, text, {
               fontFamily: "EB Garamond",
@@ -1699,7 +1734,7 @@
             alpha: 1,
             duration: 700,
             onComplete: () => {
-              this.time.delayedCall(3000, () => {
+              this.time.delayedCall(duration, () => {
                 this.tweens.add({
                   targets: t,
                   alpha: 0,
@@ -2538,6 +2573,10 @@
 
         solveMousePuzzle() {
           this.mousePuzzleSolved = true;
+          if (this.hintBtn) {
+            this.hintBtn.setVisible(false);
+            this.tweens.killTweensOf(this.hintBtn);
+          }
 
           // Replace mouse body in outBody + battery with the final powered toy in outFinal
           let slots = this.mpSlots;
@@ -2593,7 +2632,8 @@
           this.showHint("whirr...");
 
           // Spawn the toy mouse where its tail piece was found
-          let mouseStartX = this.mouseTailX;
+          let mouseLead = 60; // distance in front of cat
+          let mouseStartX = this.cat.x + mouseLead;
           let mouseY = this.gY - 2;
           this.toyMouse = this.add.graphics().setDepth(53);
           let targetX = this.treeX - 60;
@@ -2603,12 +2643,12 @@
             this.toyMouse,
             mouseStartX,
             mouseY,
-            1.4,
+            0.8,
             facingRight,
           );
           let mouseState = { x: mouseStartX };
 
-          let runDuration = Math.abs(targetX - mouseStartX) * 3.0;
+          let runDuration = Math.abs(targetX - mouseStartX) * 2.0;
 
           this.time.delayedCall(700, () => {
             // toy mouse runs to the tree
@@ -2623,7 +2663,7 @@
                   this.toyMouse,
                   mouseState.x,
                   mouseY,
-                  1.4,
+                  0.6,
                   facingRight,
                 );
               },
@@ -2648,10 +2688,10 @@
           if (this.cache.audio.exists("catFootsteps")) {
             this.sound.play("catFootsteps", { volume: 0.4 });
           }
-          let runDuration = Math.abs(targetX - this.cat.x) * 4.6;
+          let runDuration = Math.abs(targetX - this.cat.x) * 6.0;
           this.tweens.add({
             targets: this.cat,
-            x: targetX + 60,
+            x: targetX - 40,
             duration: runDuration,
             ease: "Sine.Out",
             onComplete: () => {
@@ -2737,7 +2777,7 @@
             py,
             "mouseHead",
             this.mouseHeadX,
-            "Head of an Electrical Mouse",
+            "Head of an Electrical Mouse Press 'E' to collect",
             "Head of an electrical mouse...",
           );
           this.checkItemPickup(
@@ -2840,17 +2880,38 @@
               this.openMousePuzzle();
             }
           } else if (nearCat && this.collectedCount < 3) {
-            this.showPuzzlePrompt("[E]  Wake Cat");
+            if (this.catWakeAttempts < 2) {
+              this.showPuzzlePrompt("[E]  Wake Cat");
+            } else {
+              this.showPuzzlePrompt(
+                "The cat is very tired... there must be another way.",
+              );
+            }
+
             if (this.puzzlePrompt) {
               this.puzzlePrompt.x = px - this.cameras.main.scrollX;
               this.puzzlePrompt.y = py - PLAYER_H - 22;
             }
-            if (
-              Phaser.Input.Keyboard.JustDown(this.eKey) &&
-              !this.wakeCatTried
-            ) {
-              this.wakeCatTried = true;
-              this.showHint("The cat doesn't stir.");
+
+            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              this.catWakeAttempts++;
+
+              // Small reaction
+              this.cat.y -= 2;
+
+              this.time.delayedCall(120, () => {
+                this.cat.y += 2;
+              });
+
+              if (this.catWakeAttempts === 1) {
+                this.showHint("The cat barely reacts.");
+              }
+
+              if (this.catWakeAttempts === 2) {
+                this.showHint(
+                  "The cat is very tired... there must be another way.",
+                );
+              }
             }
           } else if (
             !this.puzzleSolved &&
@@ -3201,7 +3262,7 @@
 
           this.cameras.main.fadeIn(2200);
           this.time.delayedCall(1900, () => this.showText("...", 2000));
-          this.time.delayedCall(5000, () => this.showText("Where am I?", 2500));
+          this.time.delayedCall(3000, () => this.showText("Where am I?", 2500));
           this.time.delayedCall(8800, () =>
             this.showText("I need to find a way home.", 2800),
           );
