@@ -3218,6 +3218,7 @@
           this.plateOrder = ["rubber", "metal", "wood"];
           this.plateSelectIndex = 0;
           this.placedPlate = null; // { type, img, x }
+          this.isFloating = false;
           this.crossingFinished = false;
           this.arcTimer = 0;
 
@@ -4282,24 +4283,42 @@
 
           let moving = false;
           if (!this.isLanding) {
-            if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 25) {
-              px -= this.speed * dt;
-              this.player.setFlipX(true);
-              moving = true;
-            }
-            if (this.cursors.right.isDown || this.wasd.D.isDown) {
-              px += this.speed * dt;
-              this.player.setFlipX(false);
-              moving = true;
-            }
-            if (
-              (this.cursors.up.isDown ||
-                this.cursors.space.isDown ||
-                this.wasd.W.isDown) &&
-              this.onGround
-            ) {
-              this.pVY = -390;
-              this.setAnim("jump");
+            if (this.isFloating) {
+              // Rafting: drift steadily toward the far bank; left/right nudges speed
+              let driftSpeed = 70; // px/sec base drift
+              let nudge = 0;
+              if (this.cursors.left.isDown || this.wasd.A.isDown) {
+                nudge = -40;
+                this.player.setFlipX(true);
+                moving = true;
+              }
+              if (this.cursors.right.isDown || this.wasd.D.isDown) {
+                nudge = 40;
+                this.player.setFlipX(false);
+                moving = true;
+              }
+              px += (driftSpeed + nudge) * dt;
+              px = Phaser.Math.Clamp(px, this.pondX1 + 5, this.pondX2 - 5);
+            } else {
+              if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 25) {
+                px -= this.speed * dt;
+                this.player.setFlipX(true);
+                moving = true;
+              }
+              if (this.cursors.right.isDown || this.wasd.D.isDown) {
+                px += this.speed * dt;
+                this.player.setFlipX(false);
+                moving = true;
+              }
+              if (
+                (this.cursors.up.isDown ||
+                  this.cursors.space.isDown ||
+                  this.wasd.W.isDown) &&
+                this.onGround
+              ) {
+                this.pVY = -390;
+                this.setAnim("jump");
+              }
             }
           }
 
@@ -4320,12 +4339,44 @@
           if (
             px > this.pondX1 + 5 &&
             px < this.pondX2 - 5 &&
-            py >= this.gY - 10
+            py >= this.gY - 10 &&
+            !this.isFloating
           ) {
             this.die("water");
           }
-          if (this.p2Solved && !this.crossingFinished && px >= this.pondX2) {
-            this.finishCrossing();
+
+          // While rafting, keep the plate centered under the player and
+          // gently bob it with the water
+          if (this.isFloating && this.placedPlate) {
+            this.placedPlate.x = px;
+            this.placedPlate.img.clear();
+            let colors = { rubber: 0x2a2a2a, metal: 0x8892a0, wood: 0x8a6840 };
+            this.placedPlate.img.fillStyle(colors[this.placedPlate.type], 1);
+            this.placedPlate.img.fillRoundedRect(
+              px - 70,
+              this.gY - 12,
+              140,
+              12,
+              2,
+            );
+            this.placedPlate.img.lineStyle(1.5, 0xffffff, 0.18);
+            this.placedPlate.img.strokeRoundedRect(
+              px - 70,
+              this.gY - 12,
+              140,
+              12,
+              2,
+            );
+
+            if (px >= this.pondX2 - 5) {
+              this.isFloating = false;
+              if (this.placedPlate) {
+                this.placedPlate.img.destroy();
+                this.placedPlate = null;
+              }
+              this.solvePuzzle2();
+              this.time.delayedCall(2600, () => this.finishCrossing());
+            }
           }
 
           this.player.x = px;
@@ -4419,8 +4470,10 @@
         // a walkable bridge; metal and wood sink and pull the player under
         // if they're stepped on.
         placePlate(type) {
-          let cx = (this.pondX1 + this.pondX2) / 2;
           let floating = type === "rubber";
+          let spawnX = floating
+            ? this.player.x
+            : (this.pondX1 + this.pondX2) / 2;
 
           let img = this.add.graphics().setDepth(25);
           let colors = {
@@ -4429,16 +4482,17 @@
             wood: 0x8a6840,
           };
           img.fillStyle(colors[type], 1);
-          img.fillRoundedRect(cx - 70, this.gY - 12, 140, 12, 2);
+          img.fillRoundedRect(spawnX - 70, this.gY - 12, 140, 12, 2);
           img.lineStyle(1.5, 0xffffff, 0.18);
-          img.strokeRoundedRect(cx - 70, this.gY - 12, 140, 12, 2);
+          img.strokeRoundedRect(spawnX - 70, this.gY - 12, 140, 12, 2);
 
-          this.placedPlate = { type, img, x: cx, floating };
+          this.placedPlate = { type, img, x: spawnX, floating };
           this.plates[type] = false;
           this.updateInventory();
 
           if (floating) {
-            this.solvePuzzle2();
+            this.isFloating = true;
+            this.showText("It holds. I can ride it across.", 2400);
           } else {
             this.showText("It's sinking!", 1600);
             this.tweens.add({
