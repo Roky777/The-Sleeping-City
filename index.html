@@ -3204,9 +3204,6 @@
           this.hasRod = false;
           this.p1Solved = false;
           this.p2Solved = false;
-          this.rubberCount = 0;
-          this.rubberPlaced = 0;
-          this.safeZones = [];
           this.pitZones = [];
           this.lamps = [];
           this.eyePairs = [];
@@ -3214,9 +3211,14 @@
           this.inventoryText = null;
           this.nearFuseBox = false;
           this.nearRod = false;
-          this.nearRubber = [];
-          this.liveX1 = 4300;
-          this.liveX2 = 4810;
+          // ── Pond crossing (Puzzle 2) ──
+          this.pondX1 = 4300;
+          this.pondX2 = 4900;
+          this.plates = { rubber: false, metal: false, wood: false };
+          this.plateOrder = ["rubber", "metal", "wood"];
+          this.plateSelectIndex = 0;
+          this.placedPlate = null; // { type, img, x }
+          this.crossingFinished = false;
           this.arcTimer = 0;
 
           this.buildBG();
@@ -3236,8 +3238,7 @@
           this.cursors = this.input.keyboard.createCursorKeys();
           this.wasd = this.input.keyboard.addKeys("W,A,S,D");
           this.eKey = this.input.keyboard.addKey("E");
-
-          // Ambient music carries over from the outer world, fading back up
+          this.fKey = this.input.keyboard.addKey("F");
           // to a quieter "underground" presence
           this.music = this.passedMusic;
           if (this.music && this.music.isPlaying) {
@@ -3372,6 +3373,10 @@
               i++;
               continue;
             }
+            if (x + TILE > this.pondX1 && x < this.pondX2) {
+              i++;
+              continue;
+            }
             let key = flatKeys[i % flatKeys.length];
             this.add
               .image(x, this.gY, key)
@@ -3442,14 +3447,14 @@
             .setAlpha(0.9)
             .setDepth(4);
 
-          // Lamps: 0,1 intro | 2 fuse box | 3,4 breather zone | 5,6 puzzle 2
-          [225, 628, 880, 2550, 3200, 4700, 5100].forEach((x, i) =>
+          // Lamps: 0,1 intro | 2 fuse box | 3,4 breather zone | 5,6 pond crossing
+          [225, 628, 880, 2550, 3200, 4150, 5000].forEach((x, i) =>
             this.mkLamp(x, i),
           );
           this.drawPowerLines();
 
           // Decorative pipes + bolted beams scattered along the route
-          [120, 800, 2620, 3200, 3750, 4150, 5300, 5800].forEach((x, i) => {
+          [120, 800, 2620, 3200, 3750, 3870, 5300, 5800].forEach((x, i) => {
             let pipeKeys = [
               "pipe_vertical1",
               "pipe_vertical2",
@@ -3611,6 +3616,13 @@
 
           this.pitDarkness.fillRect(gaugeX1, 0, gaugeX2 - gaugeX1, H);
 
+          // Blur transition on the RIGHT side
+          for (let i = 0; i < BLUR; i++) {
+            this.pitDarkness.fillStyle(0x000000, 1 - i / BLUR);
+
+            this.pitDarkness.fillRect(gaugeX2 + i, 0, 1, H);
+          }
+
           // this.door1 = this.add
           //   .image(gaugeX2 + 30, this.gY, "door")
           //   .setOrigin(0.5, 1)
@@ -3650,110 +3662,52 @@
             .setAlpha(0.6)
             .setDepth(3);
 
-          // ═══ PUZZLE 2 — Live Floor ════════════════════════════
+          // ═══ PUZZLE 2 — The Pond Crossing ════════════════════════
+          // Three plates lie scattered just before the water — rubber,
+          // metal, and wood. Only rubber floats.
+          this.plateDefs = {
+            rubber: { x: 3990, color: 0x2a2a2a, label: "Rubber Plate" },
+            metal: { x: 4090, color: 0x8892a0, label: "Metal Plate" },
+            wood: { x: 4190, color: 0x8a6840, label: "Wooden Plate" },
+          };
+          this.plateIcons = {};
+          Object.entries(this.plateDefs).forEach(([type, def]) => {
+            let g = this.add.graphics().setDepth(5);
+            g.fillStyle(def.color, 1);
+            g.fillRoundedRect(def.x - 30, this.gY - 10, 60, 10, 2);
+            g.lineStyle(1.5, 0xffffff, 0.18);
+            g.strokeRoundedRect(def.x - 30, this.gY - 10, 60, 10, 2);
+            this.tweens.add({
+              targets: g,
+              alpha: { from: 0.6, to: 1 },
+              duration: 1100,
+              yoyo: true,
+              repeat: -1,
+            });
+            this.plateIcons[type] = g;
+          });
+
+          // The pond itself — a wide gap of water the player must cross
+          this.pondG = this.add.graphics().setDepth(20);
+          this.drawPond();
+
+          // Rocky/industrial rim either side of the pond
           this.add
-            .image(4555, this.gY, "panel_large1")
-            .setOrigin(0.5, 1)
-            .setDisplaySize(180, 170)
-            .setDepth(4);
+            .image(this.pondX1, this.gY, "ground_pit_v_left")
+            .setOrigin(1, 0)
+            .setDisplaySize(140, 140)
+            .setDepth(2);
           this.add
-            .image(4555, this.gY - 175, "sign_power")
+            .image(this.pondX2, this.gY, "ground_pit_v_right")
+            .setOrigin(0, 0)
+            .setDisplaySize(140, 140)
+            .setDepth(2);
+
+          this.add
+            .image(4150, this.gY - 175, "sign_power")
             .setOrigin(0.5, 1)
             .setDisplaySize(44, 44)
             .setDepth(5);
-
-          // Hazard tape framing the live-floor zone
-          this.add
-            .image(this.liveX1, this.gY - 30, "hazard_orange1")
-            .setOrigin(0.5, 1)
-            .setDisplaySize(70, 70)
-            .setDepth(21);
-          this.add
-            .image(this.liveX2, this.gY - 30, "hazard_orange1")
-            .setOrigin(0.5, 1)
-            .setDisplaySize(70, 70)
-            .setFlipX(true)
-            .setDepth(21);
-          for (let x = this.liveX1; x < this.liveX2; x += 56)
-            this.add
-              .image(x, this.gY - 56, "hazard_orange4")
-              .setOrigin(0, 1)
-              .setDisplaySize(58, 18)
-              .setAlpha(0.85)
-              .setDepth(21);
-
-          this.liveG = this.add.graphics().setDepth(20);
-          this.drawLiveFloor();
-
-          this.liveSparkG = this.add.graphics().setDepth(22);
-          this.time.addEvent({
-            delay: 195,
-            repeat: -1,
-            callback: () => {
-              if (this.p2Solved) return;
-              this.liveSparkG.clear();
-              if (Math.random() > 0.22) {
-                let sx = Phaser.Math.Between(
-                  this.liveX1 + 60,
-                  this.liveX2 - 60,
-                );
-                this.liveSparkG.fillStyle(
-                  0x3377ff,
-                  Phaser.Math.FloatBetween(0.5, 1),
-                );
-                this.liveSparkG.fillCircle(
-                  sx,
-                  this.gY - 2,
-                  Phaser.Math.Between(3, 9),
-                );
-                this.liveSparkG.fillStyle(0x88bbff, 0.16);
-                this.liveSparkG.fillCircle(sx, this.gY - 2, 20);
-              }
-            },
-          });
-
-          this.rubberBlocks = [];
-          [{ x: 4380 }, { x: 4320 }, { x: 4430 }, { x: 4370 }].forEach(
-            (b, i) => {
-              let tealKeys = [
-                "crate_blue1",
-                "crate_blue2",
-                "crate_green1",
-                "crate_green2",
-              ];
-              let img = this.add
-                .image(b.x, this.gY, tealKeys[i % tealKeys.length])
-                .setOrigin(0.5, 1)
-                .setDisplaySize(60, 60)
-                .setDepth(5);
-              this.rubberBlocks.push({ x: b.x, img, collected: false });
-            },
-          );
-
-          this.add
-            .image(4250, this.gY, "crate_olive1")
-            .setOrigin(0.5, 1)
-            .setDisplaySize(64, 64)
-            .setDepth(5);
-
-          this.add
-            .image(4950, this.gY - 50, "panel_orange1")
-            .setOrigin(0.5, 1)
-            .setDisplaySize(110, 130)
-            .setDepth(5);
-          this.leverImg = this.add
-            .image(4970, this.gY - 8, "switch_green_off")
-            .setOrigin(0.5, 1)
-            .setDisplaySize(70, 76)
-            .setDepth(5);
-
-          // Gear decoration near the lever — mechanical theme
-          this.add
-            .image(4870, this.gY - 4, "gear_medium")
-            .setOrigin(0.5, 1)
-            .setDisplaySize(70, 70)
-            .setAlpha(0.7)
-            .setDepth(4);
 
           //   this.door2 = this.add
           //     .image(5050, this.gY, "door")
@@ -4006,15 +3960,31 @@
           });
         }
 
-        drawLiveFloor() {
-          this.liveG.clear();
-          this.liveG.fillStyle(0x0a1e88, 0.07);
-          this.liveG.fillRect(
-            this.liveX1,
-            this.gY - 10,
-            this.liveX2 - this.liveX1,
-            18,
-          );
+        drawPond() {
+          this.pondG.clear();
+          let w = this.pondX2 - this.pondX1;
+          // Deep water body
+          this.pondG.fillStyle(0x0e2030, 1);
+          this.pondG.fillRect(this.pondX1, this.gY, w, H - this.gY);
+          // Gradient-ish shading toward the bottom
+          this.pondG.fillStyle(0x081420, 0.6);
+          this.pondG.fillRect(this.pondX1, this.gY + 60, w, H - this.gY - 60);
+          // Rippling surface line
+          this.pondG.lineStyle(2, 0x3a6080, 0.5);
+          this.pondG.beginPath();
+          let wx = this.pondX1;
+          this.pondG.moveTo(wx, this.gY + 2);
+          while (wx < this.pondX2) {
+            wx += 24;
+            let off = Math.sin((wx + (this._pondT || 0)) * 0.05) * 3;
+            this.pondG.lineTo(wx, this.gY + 2 + off);
+          }
+          this.pondG.strokePath();
+          // Faint highlight glints
+          this.pondG.fillStyle(0x5a8aa8, 0.12);
+          for (let gx = this.pondX1 + 30; gx < this.pondX2; gx += 70) {
+            this.pondG.fillEllipse(gx, this.gY + 14, 36, 6);
+          }
         }
 
         createPlayer() {
@@ -4086,8 +4056,9 @@
           if (this.inventoryText) this.inventoryText.destroy();
           let items = [];
           if (this.hasRod) items.push("⚡ Metal Rod");
-          if (this.rubberCount > 0)
-            items.push(`🟫 Rubber ×${this.rubberCount}`);
+          if (this.plates.rubber) items.push("⬛ Rubber Plate");
+          if (this.plates.metal) items.push("⬜ Metal Plate");
+          if (this.plates.wood) items.push("🟫 Wooden Plate");
           if (!items.length) return;
           this.inventoryText = this.add
             .text(16, 16, items.join("   "), {
@@ -4114,18 +4085,29 @@
               H / 2,
               W,
               H,
-              type === "electric" ? 0x0e1e88 : 0x000000,
-              type === "electric" ? 0.55 : 0.9,
+              type === "electric"
+                ? 0x0e1e88
+                : type === "water"
+                  ? 0x0a2a44
+                  : 0x000000,
+              type === "electric" ? 0.55 : type === "water" ? 0.7 : 0.9,
             )
             .setScrollFactor(0)
             .setDepth(460)
-            .setAlpha(type === "electric" ? 0.55 : 0.9);
+            .setAlpha(
+              type === "electric" ? 0.55 : type === "water" ? 0.7 : 0.9,
+            );
 
           let dt = this.add
             .text(W / 2, H / 2, "...", {
               fontFamily: "EB Garamond",
               fontSize: "60px",
-              color: type === "electric" ? "#3355cc" : "#1c2a38",
+              color:
+                type === "electric"
+                  ? "#3355cc"
+                  : type === "water"
+                    ? "#4488aa"
+                    : "#1c2a38",
             })
             .setOrigin(0.5)
             .setScrollFactor(0)
@@ -4179,14 +4161,6 @@
               duration: 1400,
             });
           });
-          this.time.delayedCall(980, () => {
-            this.tweens.add({
-              targets: this.door1,
-              x: "+=140",
-              duration: 960,
-              ease: "Power2",
-            });
-          });
 
           this.respawnX = 1250;
           this.updateInventory();
@@ -4198,39 +4172,33 @@
         solvePuzzle2() {
           this.p2Solved = true;
           this.hidePrompt();
-          this.liveSparkG.clear();
-          this.liveG.clear();
 
           this.cameras.main.flash(500, 80, 160, 255, false);
-          this.leverImg.setTexture("switch_green_on");
 
           this.time.delayedCall(340, () => this.turnLampOn(5));
           this.time.delayedCall(780, () => this.turnLampOn(6));
-          this.time.delayedCall(1100, () => {
-            this.tweens.add({
-              targets: this.door2,
-              x: "+=140",
-              duration: 960,
-              ease: "Power2",
-            });
-          });
 
-          this.respawnX = 4900;
+          this.respawnX = this.pondX1 - 60;
           this.updateInventory();
-          this.showText("Rubber blocks the current.", 2100, () => {
-            this.showText("Some materials protect. Others carry.", 2900, () => {
-              this.time.delayedCall(1600, () => {
-                this.cameras.main.fade(1900, 0, 0, 0);
-                if (this.music)
-                  this.tweens.add({
-                    targets: this.music,
-                    volume: 0,
-                    duration: 1900,
-                  });
-                this.time.delayedCall(1900, () => {
-                  if (this.music) this.music.stop();
-                  this.scene.start("EndingScene");
+          this.showText("The rubber holds against the water.", 2300);
+        }
+
+        // Called once the player walks across the placed rubber plate and
+        // reaches the far bank — the true end of the crossing.
+        finishCrossing() {
+          this.crossingFinished = true;
+          this.showText("Solid ground.", 2000, () => {
+            this.time.delayedCall(1200, () => {
+              this.cameras.main.fade(1900, 0, 0, 0);
+              if (this.music)
+                this.tweens.add({
+                  targets: this.music,
+                  volume: 0,
+                  duration: 1900,
                 });
+              this.time.delayedCall(1900, () => {
+                if (this.music) this.music.stop();
+                this.scene.start("EndingScene");
               });
             });
           });
@@ -4241,28 +4209,11 @@
           tickRain(this.rain, delta);
           tickGrain(this.grain, delta);
 
-          if (!this.p2Solved) {
-            this.arcTimer += delta;
-            if (this.arcTimer > 160) {
-              this.arcTimer = 0;
-              this.liveG.clear();
-              this.liveG.fillStyle(0x0a1e88, 0.07);
-              this.liveG.fillRect(
-                this.liveX1,
-                this.gY - 10,
-                this.liveX2 - this.liveX1,
-                18,
-              );
-              this.liveG.lineStyle(1, 0x4488ff, 0.55);
-              this.liveG.beginPath();
-              let ax = this.liveX1;
-              this.liveG.moveTo(ax, this.gY - 4);
-              while (ax < this.liveX2) {
-                ax += Phaser.Math.Between(18, 42);
-                this.liveG.lineTo(ax, this.gY - Phaser.Math.Between(2, 15));
-              }
-              this.liveG.strokePath();
-            }
+          this.arcTimer += delta;
+          if (this.arcTimer > 160) {
+            this.arcTimer = 0;
+            this._pondT = (this._pondT || 0) + 8;
+            this.drawPond();
           }
 
           if (this.creatures) {
@@ -4288,6 +4239,17 @@
             for (let pit of this.pitZones) {
               if (px > pit.x1 && px < pit.x2) return null;
             }
+          }
+          // Pond gap: solid only where a (still-floating) plate is placed
+          if (px > this.pondX1 && px < this.pondX2) {
+            if (
+              this.placedPlate &&
+              this.placedPlate.floating &&
+              Math.abs(px - this.placedPlate.x) < 70
+            ) {
+              return this.gY;
+            }
+            return null;
           }
           return this.gY;
         }
@@ -4355,9 +4317,15 @@
             if (px > pit.x1 + 5 && px < pit.x2 - 5 && py >= this.gY - 10)
               this.die("pit");
           });
-          if (!this.p2Solved && px > this.liveX1 && px < this.liveX2) {
-            if (!this.safeZones.some((z) => px > z.x1 && px < z.x2))
-              this.die("electric");
+          if (
+            px > this.pondX1 + 5 &&
+            px < this.pondX2 - 5 &&
+            py >= this.gY - 10
+          ) {
+            this.die("water");
+          }
+          if (this.p2Solved && !this.crossingFinished && px >= this.pondX2) {
+            this.finishCrossing();
           }
 
           this.player.x = px;
@@ -4405,40 +4373,87 @@
             this.nearFuseBox = false;
           }
 
-          this.nearRubber = [];
-          this.rubberBlocks.forEach((b, i) => {
-            if (!b.collected && Math.abs(px - b.x) < 70) {
-              this.nearRubber.push(i);
+          // ── Plate pickups (rubber / metal / wood) ──
+          this.nearPlate = null;
+          Object.entries(this.plateDefs).forEach(([type, def]) => {
+            if (this.plates[type]) return;
+            if (Math.abs(px - def.x) < 60) {
+              this.nearPlate = type;
               if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-                b.collected = true;
-                b.img.setVisible(false);
-                this.rubberCount++;
+                this.plates[type] = true;
+                this.plateIcons[type].setVisible(false);
+                this.tweens.killTweensOf(this.plateIcons[type]);
                 this.updateInventory();
+                this.showText("It's a " + def.label.toLowerCase() + ".", 1800);
               }
             }
           });
 
-          if (
-            this.rubberCount > 0 &&
-            px > this.liveX1 - 90 &&
-            px < this.liveX2 + 90
-          ) {
-            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-              this.add
-                .image(px, this.gY, "crate_blue1")
-                .setOrigin(0.5, 1)
-                .setDisplaySize(60, 60)
-                .setDepth(30);
-              let sg = this.add.graphics().setDepth(29);
-              sg.fillStyle(0x00aa44, 0.09);
-              sg.fillRect(px - 27, this.gY - 54, 54, 54);
-              this.safeZones.push({ x1: px - 27, x2: px + 27 });
-              this.rubberCount--;
-              this.rubberPlaced++;
-              this.updateInventory();
-              if (this.rubberPlaced >= 3)
-                this.time.delayedCall(420, () => this.solvePuzzle2());
+          // ── Pond edge: cycle + place a plate ──
+          this.nearPond =
+            !this.p2Solved &&
+            px > this.pondX1 - 90 &&
+            px < this.pondX1 + 10 &&
+            !this.placedPlate;
+          if (this.nearPond) {
+            let haveAny = this.plateOrder.some((t) => this.plates[t]);
+            if (haveAny) {
+              if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+                // cycle to the next plate the player actually has
+                for (let n = 0; n < this.plateOrder.length; n++) {
+                  this.plateSelectIndex =
+                    (this.plateSelectIndex + 1) % this.plateOrder.length;
+                  if (this.plates[this.plateOrder[this.plateSelectIndex]])
+                    break;
+                }
+              }
+              if (Phaser.Input.Keyboard.JustDown(this.fKey)) {
+                let type = this.plateOrder[this.plateSelectIndex];
+                if (this.plates[type]) this.placePlate(type);
+              }
             }
+          }
+        }
+
+        // Places the chosen plate across the pond. Rubber floats and forms
+        // a walkable bridge; metal and wood sink and pull the player under
+        // if they're stepped on.
+        placePlate(type) {
+          let cx = (this.pondX1 + this.pondX2) / 2;
+          let floating = type === "rubber";
+
+          let img = this.add.graphics().setDepth(25);
+          let colors = {
+            rubber: 0x2a2a2a,
+            metal: 0x8892a0,
+            wood: 0x8a6840,
+          };
+          img.fillStyle(colors[type], 1);
+          img.fillRoundedRect(cx - 70, this.gY - 12, 140, 12, 2);
+          img.lineStyle(1.5, 0xffffff, 0.18);
+          img.strokeRoundedRect(cx - 70, this.gY - 12, 140, 12, 2);
+
+          this.placedPlate = { type, img, x: cx, floating };
+          this.plates[type] = false;
+          this.updateInventory();
+
+          if (floating) {
+            this.solvePuzzle2();
+          } else {
+            this.showText("It's sinking!", 1600);
+            this.tweens.add({
+              targets: img,
+              y: 120,
+              alpha: 0,
+              duration: 1100,
+              ease: "Cubic.In",
+              onComplete: () => {
+                img.destroy();
+                this.placedPlate.floating = false;
+                this.placedPlate = null;
+                this.showText("That won't hold. I need something else.", 2400);
+              },
+            });
           }
         }
 
@@ -4457,15 +4472,20 @@
             this.showPrompt("[E]  Connect rod to fuse box");
           else if (this.nearFuseBox && !this.hasRod)
             this.showPrompt("Something is broken here...");
-          else if (this.nearRubber.length > 0)
-            this.showPrompt("[E]  Pick up rubber block");
-          else if (
-            this.rubberCount > 0 &&
-            px > this.liveX1 - 90 &&
-            px < this.liveX2 + 90
-          )
-            this.showPrompt("[E]  Place rubber block");
-          else this.hidePrompt();
+          else if (this.nearPlate)
+            this.showPrompt(
+              "[E]  Pick up " + this.plateDefs[this.nearPlate].label,
+            );
+          else if (this.nearPond) {
+            let haveAny = this.plateOrder.some((t) => this.plates[t]);
+            if (haveAny) {
+              let cur = this.plateOrder[this.plateSelectIndex];
+              let label = this.plates[cur] ? this.plateDefs[cur].label : "...";
+              this.showPrompt("[E]  Cycle   [F]  Place — " + label);
+            } else {
+              this.showPrompt("The water is too deep to cross like this.");
+            }
+          } else this.hidePrompt();
 
           if (this.interactPrompt) {
             this.interactPrompt.x = sx;
