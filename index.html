@@ -1,0 +1,4627 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>The Sleeping City</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=EB+Garamond:ital@0;1&display=swap"
+      rel="stylesheet" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #000;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <script src="node_modules/phaser/dist/phaser.min.js"></script>
+    <script>
+      const W = 1280,
+        H = 720;
+      const PLAYER_H = 76; // smaller character — world feels bigger, journey takes longer
+
+      // Per-animation metrics (measured from the actual sprite art inside each frame):
+      // charH = character pixel height, ox/oy = origin so feet plant on the ground.
+      const PLAYER_ANIMS = {
+        stand: { charH: 114, ox: 0.5, oy: 0.984 },
+        run: { charH: 83, ox: 0.5, oy: 0.978 },
+        jump: { charH: 123, ox: 0.5, oy: 0.985 },
+        fall: { charH: 140, ox: 0.5, oy: 0.986 },
+        land: { charH: 146, ox: 0.5, oy: 0.987 },
+        death: { charH: 134, ox: 0.5, oy: 0.986 },
+      };
+
+      // Apply correct scale + origin for a given animation, then play it.
+      // Keeps the character a constant on-screen size with feet planted.
+      function setPlayerAnim(sprite, state, name) {
+        if (state.curAnim === name) return;
+        state.curAnim = name;
+        let m = PLAYER_ANIMS[name];
+        sprite.setScale(PLAYER_H / m.charH);
+        sprite.setOrigin(m.ox, m.oy);
+        sprite.play("anim_" + name, true);
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // SHARED HELPERS
+      // ════════════════════════════════════════════════════════════════
+
+      // groundScreenY: screen-space Y where drops splash. If omitted, no splashes.
+      function mkRain(scene, count, depth, groundScreenY) {
+        let g = scene.add.graphics().setScrollFactor(0).setDepth(depth);
+        let drops = [];
+        for (let i = 0; i < count; i++) {
+          drops.push({
+            x: Phaser.Math.Between(0, W),
+            y: Phaser.Math.Between(0, H),
+            spd: Phaser.Math.FloatBetween(480, 920),
+            len: Phaser.Math.Between(10, 28),
+            a: Phaser.Math.FloatBetween(0.07, 0.26),
+          });
+        }
+        return { g, drops, splashes: [], groundY: groundScreenY || null };
+      }
+
+      function tickRain(rain, delta) {
+        rain.g.clear();
+        let gy = rain.groundY;
+        rain.drops.forEach((d) => {
+          d.y += (d.spd * delta) / 1000;
+          d.x -= (d.spd * 0.17 * delta) / 1000;
+          if (gy && d.y >= gy) {
+            rain.splashes.push({ x: d.x, y: gy, r: 1, life: 1 });
+            d.y = -20;
+            d.x = Phaser.Math.Between(0, W);
+          }
+          if (d.y > H + 10) {
+            d.y = -20;
+            d.x = Phaser.Math.Between(0, W);
+          }
+          if (d.x < -10) d.x = W + 10;
+          rain.g.lineStyle(1, 0x9aaabb, d.a);
+          rain.g.beginPath();
+          rain.g.moveTo(d.x, d.y);
+          rain.g.lineTo(d.x - 4, d.y + d.len);
+          rain.g.strokePath();
+        });
+        for (let i = rain.splashes.length - 1; i >= 0; i--) {
+          let s = rain.splashes[i];
+          s.r += delta * 0.045;
+          s.life -= delta / 480;
+          if (s.life <= 0) {
+            rain.splashes.splice(i, 1);
+            continue;
+          }
+          rain.g.lineStyle(1, 0xaaccdd, 0.22 * s.life);
+          rain.g.strokeEllipse(s.x, s.y, s.r * 2.4, s.r * 0.9);
+        }
+      }
+
+      function mkGrain(scene, depth) {
+        return {
+          g: scene.add.graphics().setScrollFactor(0).setDepth(depth),
+          t: 0,
+        };
+      }
+
+      function tickGrain(gr, delta) {
+        gr.t += delta;
+        if (gr.t < 50) return;
+        gr.t = 0;
+        gr.g.clear();
+        for (let i = 0; i < 380; i++) {
+          gr.g.fillStyle(
+            Math.random() > 0.55 ? 0x6688aa : 0xffffff,
+            Phaser.Math.FloatBetween(0.006, 0.028),
+          );
+          gr.g.fillRect(
+            Phaser.Math.Between(0, W),
+            Phaser.Math.Between(0, H),
+            1,
+            1,
+          );
+        }
+      }
+
+      function mkVignette(scene, depth) {
+        let v = scene.add.graphics().setScrollFactor(0).setDepth(depth);
+        v.fillGradientStyle(
+          0x000000,
+          0x000000,
+          0x000000,
+          0x000000,
+          0.92,
+          0,
+          0.92,
+          0,
+        );
+        v.fillRect(0, 0, 220, H);
+        v.fillGradientStyle(
+          0x000000,
+          0x000000,
+          0x000000,
+          0x000000,
+          0,
+          0.92,
+          0,
+          0.92,
+        );
+        v.fillRect(W - 220, 0, 220, H);
+        v.fillGradientStyle(
+          0x000000,
+          0x000000,
+          0x000000,
+          0x000000,
+          0.78,
+          0.78,
+          0,
+          0,
+        );
+        v.fillRect(0, 0, W, 160);
+        v.fillGradientStyle(
+          0x000000,
+          0x000000,
+          0x000000,
+          0x000000,
+          0,
+          0,
+          0.68,
+          0.68,
+        );
+        v.fillRect(0, H - 105, W, 105);
+      }
+
+      // Cinematic letterbox — THE signature look of Inside / Limbo
+      function mkBars(scene, depth) {
+        let b = scene.add.graphics().setScrollFactor(0).setDepth(depth);
+        b.fillStyle(0x000000, 1);
+        b.fillRect(0, 0, W, 58);
+        b.fillRect(0, H - 58, W, 58);
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // PRELOAD
+      // ════════════════════════════════════════════════════════════════
+      class PreloadScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "PreloadScene" });
+        }
+
+        preload() {
+          let bg = this.add.graphics();
+          bg.fillStyle(0x000000, 1);
+          bg.fillRect(0, 0, W, H);
+          this.add
+            .text(W / 2, H / 2 - 40, "THE SLEEPING CITY", {
+              fontFamily: "Cinzel",
+              fontSize: "32px",
+              color: "#c8a050",
+            })
+            .setOrigin(0.5);
+          let barBg = this.add.graphics();
+          barBg.fillStyle(0x1a1a1a, 1);
+          barBg.fillRect(W / 2 - 200, H / 2 + 18, 400, 5);
+          let bar = this.add.graphics();
+          this.load.on("progress", (v) => {
+            bar.clear();
+            bar.fillStyle(0xc8a050, 1);
+            bar.fillRect(W / 2 - 200, H / 2 + 18, 400 * v, 5);
+          });
+
+          // ── Player sprite sheets ──
+          this.load.spritesheet("run", "assets/run.png", {
+            frameWidth: 90,
+            frameHeight: 91,
+          });
+          this.load.spritesheet("stand", "assets/stand.png", {
+            frameWidth: 54,
+            frameHeight: 122,
+          });
+          this.load.spritesheet("jump", "assets/jump.png", {
+            frameWidth: 89,
+            frameHeight: 131,
+          });
+          this.load.spritesheet("fall", "assets/fall.png", {
+            frameWidth: 101,
+            frameHeight: 148,
+          });
+          this.load.spritesheet("land", "assets/land.png", {
+            frameWidth: 111,
+            frameHeight: 154,
+          });
+          this.load.spritesheet("death", "assets/death.png", {
+            frameWidth: 216,
+            frameHeight: 142,
+          });
+
+          // ── City environment (existing) ──
+          this.load.image("sky", "assets/DarkNightSky.png");
+          this.load.image("distantCity", "assets/DistantCitySilhouette.png");
+          this.load.image("farBuildings", "assets/Far Buildings.png");
+          this.load.image("midBuildings", "assets/Mid-Ground Buildings.png");
+          this.load.image("roadTiles", "assets/RoadGroundTiles.png");
+          this.load.image("sidewalk", "assets/Sidewalk Tiles.png");
+          this.load.image("brokenPave", "assets/BrokenPavementTiles.png");
+
+          // ── Props ──
+          this.load.image("fuseBox", "assets/FuseBox.png");
+          this.load.image("transformer", "assets/BrokenTransformer.png");
+          // this.load.image("door", "assets/Door.png");
+          this.load.image("lever", "assets/Lever.png");
+          this.load.image("generator", "assets/Generator.png");
+          this.load.image("metalCrate", "assets/MetalCrate.png");
+          this.load.image("woodenCrate", "assets/WoodenCrate.png");
+          this.load.image("pushableBox", "assets/PushableBox.png");
+          this.load.image("electricPanel", "assets/ElectricPanel.png");
+
+          // ── FOREST ASSETS ──
+          this.load.image("treehouse", "assets/forest/treehouse.png");
+          this.load.image("ftree1", "assets/forest/tree1.png");
+          this.load.image("ftree2", "assets/forest/tree2.png");
+          this.load.image("ftree3", "assets/forest/tree3.png");
+          this.load.image("ftree4", "assets/forest/tree4.png");
+          this.load.image("ftree5", "assets/forest/tree5.png");
+          this.load.image("ruin1", "assets/forest/ruin1.png");
+          this.load.image("ruin2", "assets/forest/ruin2.png");
+          this.load.image("ruin3", "assets/forest/ruin3.png");
+          for (let i = 1; i <= 7; i++)
+            this.load.image(
+              "mpillar" + i,
+              "assets/forest/m_pillar" + i + ".png",
+            );
+          this.load.image("pillar1", "assets/forest/pillar1.png");
+          this.load.image("pillar2", "assets/forest/pillar2.png");
+          for (let i = 1; i <= 7; i++)
+            this.load.image("fstone" + i, "assets/forest/stone" + i + ".png");
+          for (let i = 1; i <= 3; i++)
+            this.load.image(
+              "mushroom" + i,
+              "assets/forest/mushroom" + i + ".png",
+            );
+          for (let i = 1; i <= 3; i++)
+            this.load.image("fplant" + i, "assets/forest/plant" + i + ".png");
+          for (let i = 1; i <= 4; i++)
+            this.load.image("fgrass" + i, "assets/forest/grass" + i + ".png");
+          for (let i = 1; i <= 3; i++)
+            this.load.image("fbush" + i, "assets/forest/bush" + i + ".png");
+          for (let i = 1; i <= 9; i++)
+            this.load.image("fground" + i, "assets/forest/ground" + i + ".png");
+          for (let i = 1; i <= 8; i++)
+            this.load.image("bgtop" + i, "assets/forest/bg_top" + i + ".png");
+          for (let i = 1; i <= 9; i++)
+            this.load.image("bgtree" + i, "assets/forest/bg_tree" + i + ".png");
+          this.load.image("board1", "assets/forest/board1.png");
+          this.load.image("board2", "assets/forest/board2.png");
+
+          // ── NPC / particles ──
+          this.load.spritesheet("cat", "assets/npc/sleepingcat5.png", {
+            frameWidth: 64,
+            frameHeight: 64,
+          });
+          this.load.spritesheet("runningcat", "assets/npc/runningcat.png", {
+            frameWidth: 362,
+            frameHeight: 724,
+          });
+          this.load.image("fireflies", "assets/particles/fireflies.png");
+
+          // ── Skies ──
+          this.load.image(
+            "skyNightSunset",
+            "assets/background/city/sky_night.png",
+          );
+          this.load.image("skyStorm", "assets/background/city/sky_storm.png");
+
+          // ── INDUSTRIAL TILESET (CityScene) ──
+          [
+            "arrow_down",
+            "arrow_left",
+            "arrow_right",
+            "arrow_up",
+            "beam_bolted1",
+            "beam_bolted2",
+            "block_diagonal1",
+            "block_diagonal2",
+            "block_plain1",
+            "block_plain2",
+            "block_x1",
+            "block_x2",
+            "crate_brown1",
+            "crate_green1",
+            "crate_green2",
+            "crate_olive1",
+            "crate_blue1",
+            "crate_blue2",
+            "fence1",
+            "fence2",
+            "fence3",
+            "fence4",
+            "fence5",
+            "fence6",
+            "gear_large",
+            "gear_medium",
+            "gear_small",
+            "goo_bar1",
+            "goo_bar2",
+            "goo_bar3",
+            "goo_bar4",
+            "goo_bar_drip",
+            "ground_cap_left",
+            "ground_cap_right",
+            "ground_flat1",
+            "ground_flat2",
+            "ground_flat3",
+            "ground_flat4",
+            "ground_flat5",
+            "ground_flat6",
+            "ground_flat7",
+            "ground_flat8",
+            "ground_flat9",
+            "ground_flat10",
+            "ground_pit_floor_left",
+            "ground_pit_floor_right",
+            "ground_pit_v_left",
+            "ground_pit_v_right",
+            "ground_slope_down",
+            "ground_slope_up",
+            "hazard_orange1",
+            "hazard_orange2",
+            "hazard_orange3",
+            "hazard_orange4",
+            "hazard_orange5",
+            "hazard_yellow1",
+            "hazard_yellow2",
+            "hazard_yellow3",
+            "hazard_yellow4",
+            "hazard_yellow5",
+            "ladder1",
+            "ladder2",
+            "ladder3",
+            "ladder4",
+            "lamp_bulb_blue",
+            "lamp_bulb_green",
+            "lamp_bulb_orange",
+            "lamp_bulb_yellow",
+            "panel_console1",
+            "panel_console2",
+            "panel_console_detail",
+            "panel_large1",
+            "panel_large2",
+            "panel_large3",
+            "panel_orange1",
+            "panel_orange2",
+            "panel_screen1",
+            "panel_screen2",
+            "pipe_vertical1",
+            "pipe_vertical2",
+            "pipe_vertical3",
+            "pipe_vertical4",
+            "sign_diamond",
+            "sign_power",
+            "sign_warning_triangle",
+            "spikes_down",
+            "spikes_up",
+            "switch_blue_off",
+            "switch_blue_on",
+            "switch_green_off",
+            "switch_green_on",
+            "switch_orange_arrow",
+            "switch_orange_warning",
+            "switch_yellow_off",
+            "switch_yellow_on",
+          ].forEach((key) =>
+            this.load.image(key, "assets/industrial/" + key + ".png"),
+          );
+
+          // ── Audio ──
+          this.load.audio(
+            "ambientOpening",
+            "assets/audio/music/ambient_opening.mp3",
+          );
+          this.load.audio("rainSfx", "assets/audio/sfx/rain.wav");
+          this.load.audio("thunderSfx", "assets/audio/sfx/thunder.wav");
+          this.load.audio("windHowl", "assets/audio/sfx/wind_howl.wav");
+          this.load.audio("windRushing", "assets/audio/sfx/wind_rushing.wav");
+          this.load.audio(
+            "catFootsteps",
+            "assets/audio/sfx/run-away-footstep.wav",
+          );
+
+          this.load.on("loaderror", (file) => {
+            console.warn("Failed to load:", file.key, file.src);
+          });
+        }
+
+        create() {
+          this.anims.create({
+            key: "anim_run",
+            frames: this.anims.generateFrameNumbers("run", {
+              start: 0,
+              end: 7,
+            }),
+            frameRate: 12,
+            repeat: -1,
+          });
+          this.anims.create({
+            key: "anim_stand",
+            frames: this.anims.generateFrameNumbers("stand", {
+              start: 0,
+              end: 5,
+            }),
+            frameRate: 6,
+            repeat: -1,
+          });
+          this.anims.create({
+            key: "anim_jump",
+            frames: this.anims.generateFrameNumbers("jump", {
+              start: 0,
+              end: 3,
+            }),
+            frameRate: 10,
+            repeat: 0,
+          });
+          this.anims.create({
+            key: "anim_fall",
+            frames: this.anims.generateFrameNumbers("fall", {
+              start: 0,
+              end: 3,
+            }),
+            frameRate: 8,
+            repeat: -1,
+          });
+          this.anims.create({
+            key: "anim_land",
+            frames: this.anims.generateFrameNumbers("land", {
+              start: 0,
+              end: 2,
+            }),
+            frameRate: 12,
+            repeat: 0,
+          });
+          this.anims.create({
+            key: "anim_death",
+            frames: this.anims.generateFrameNumbers("death", {
+              start: 0,
+              end: 2,
+            }),
+            frameRate: 8,
+            repeat: 0,
+          });
+
+          // Cat sleeping/breathing loop — slow, gentle
+          this.anims.create({
+            key: "anim_cat_sleep",
+            frames: this.anims.generateFrameNumbers("cat", {
+              start: 0,
+              end: 5,
+            }),
+            frameRate: 4,
+            repeat: -1,
+          });
+
+          // Cat running/fleeing loop — quick, energetic
+          this.anims.create({
+            key: "anim_cat_run",
+            frames: this.anims.generateFrameNumbers("runningcat", {
+              start: 0,
+              end: 5,
+            }),
+            frameRate: 12,
+            repeat: -1,
+          });
+
+          this.cameras.main.fade(500, 0, 0, 0);
+          this.time.delayedCall(600, () => this.scene.start("TitleScene"));
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // TITLE SCENE — black screen, ambient swell, cinematic reveal
+      // ════════════════════════════════════════════════════════════════
+      class TitleScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "TitleScene" });
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#000000");
+
+          // Ambient opening music — fades in from silence
+          if (this.cache.audio.exists("ambientOpening")) {
+            this.music = this.sound.add("ambientOpening", {
+              loop: true,
+              volume: 0,
+            });
+            this.music.play();
+            this.tweens.add({
+              targets: this.music,
+              volume: 0.55,
+              duration: 6000,
+            });
+          }
+
+          // Distant rain — fades in slightly later
+          if (this.cache.audio.exists("rainSfx")) {
+            this.rainSnd = this.sound.add("rainSfx", { loop: true, volume: 0 });
+            this.rainSnd.play();
+            this.tweens.add({
+              targets: this.rainSnd,
+              volume: 0.18,
+              duration: 5000,
+              delay: 1500,
+            });
+          }
+
+          // Very subtle wind
+          if (this.cache.audio.exists("windHowl")) {
+            this.windSnd = this.sound.add("windHowl", {
+              loop: true,
+              volume: 0,
+            });
+            this.windSnd.play();
+            this.tweens.add({
+              targets: this.windSnd,
+              volume: 0.08,
+              duration: 7000,
+              delay: 1000,
+            });
+          }
+
+          // Pure black base
+          this.add.rectangle(W / 2, H / 2, W, H, 0x000000).setDepth(0);
+
+          // Subtle grain over black — texture, not emptiness
+          this.grain = mkGrain(this, 5);
+
+          // Title — fades in after a beat of darkness
+          let title = this.add
+            .text(W / 2, H / 2 - 56, "THE SLEEPING CITY", {
+              fontFamily: "Cinzel",
+              fontSize: "64px",
+              color: "#c8a050",
+              letterSpacing: 4,
+            })
+            .setOrigin(0.5)
+            .setAlpha(0)
+            .setDepth(30);
+
+          let subtitle = this.add
+            .text(
+              W / 2,
+              H / 2 + 24,
+              "Some cities sleep. Others are forgotten.",
+              {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "21px",
+                color: "#5a6e80",
+              },
+            )
+            .setOrigin(0.5)
+            .setAlpha(0)
+            .setDepth(30);
+
+          let press = this.add
+            .text(W / 2, H - 90, "Press Any Key", {
+              fontFamily: "EB Garamond",
+              fontSize: "15px",
+              color: "#3a4a58",
+              letterSpacing: 3,
+            })
+            .setOrigin(0.5)
+            .setAlpha(0)
+            .setDepth(30);
+
+          this.add
+            .text(
+              W / 2,
+              H - 36,
+              "Designed by Roky Paul  |  Null Paradox  |  PW Games × IOI Hackathon",
+              {
+                fontFamily: "EB Garamond",
+                fontSize: "12px",
+                color: "#1c2630",
+              },
+            )
+            .setOrigin(0.5)
+            .setDepth(30);
+
+          // Sequence: ~3.5s black & sound → title fades in → subtitle → press any key
+          this.tweens.add({
+            targets: title,
+            alpha: 1,
+            duration: 3000,
+            delay: 3500,
+          });
+          this.tweens.add({
+            targets: subtitle,
+            alpha: 1,
+            duration: 2200,
+            delay: 5800,
+          });
+          this.time.delayedCall(8200, () => {
+            this.tweens.add({
+              targets: press,
+              alpha: { from: 0, to: 0.7 },
+              duration: 1100,
+              yoyo: true,
+              repeat: -1,
+            });
+          });
+
+          this.input.keyboard.once("keydown", () => {
+            console.log("Key pressed - starting game");
+            this.cameras.main.fade(1800, 0, 0, 0);
+            if (this.music)
+              this.tweens.add({
+                targets: this.music,
+                volume: 0.15,
+                duration: 1800,
+              });
+            this.time.delayedCall(1800, () => {
+              this.scene.start("OutsideScene", {
+                music: this.music,
+                rainSnd: this.rainSnd,
+                windSnd: this.windSnd,
+              });
+            });
+          });
+
+          this.input.once("pointerdown", () => {
+            console.log("Click - starting game");
+            this.cameras.main.fade(1800, 0, 0, 0);
+            if (this.music)
+              this.tweens.add({
+                targets: this.music,
+                volume: 0.15,
+                duration: 1800,
+              });
+            this.time.delayedCall(1800, () => {
+              this.scene.start("OutsideScene", {
+                music: this.music,
+                rainSnd: this.rainSnd,
+                windSnd: this.windSnd,
+              });
+            });
+          });
+        }
+
+        update(time, delta) {
+          tickGrain(this.grain, delta);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // OUTSIDE SCENE — the forest, the ancient tree, slow curious discovery
+      // ════════════════════════════════════════════════════════════════
+      class OutsideScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "OutsideScene" });
+        }
+
+        init(data) {
+          this.passedMusic = data && data.music;
+          this.passedRain = data && data.rainSnd;
+          this.passedWind = data && data.windSnd;
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#0a0c14");
+          this.worldW = 4200; // longer world — more time to walk
+          this.gY = 588;
+          this.pVY = 0;
+          this.gravity = 900;
+          this.onGround = true;
+          this.speed = 150; // slower, deliberate pacing
+          this.triggered = false;
+          this.curAnim = null;
+
+          // Carry audio over from the title screen
+          this.music = this.passedMusic;
+          this.rainSnd = this.passedRain;
+          this.windSnd = this.passedWind;
+          if (this.rainSnd)
+            this.tweens.add({
+              targets: this.rainSnd,
+              volume: 0.22,
+              duration: 2000,
+            });
+
+          this.buildSky();
+          this.buildParallaxTrees();
+          this.buildGround();
+          this.buildRuinsAndDecor();
+          this.buildTree();
+          this.buildCat();
+          this.buildFireflies();
+
+          this.player = this.add.sprite(110, this.gY, "stand").setDepth(55);
+          setPlayerAnim(this.player, this, "stand");
+
+          this.cameras.main.setBounds(0, 0, this.worldW, H);
+          this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+          this.cursors = this.input.keyboard.createCursorKeys();
+          this.wasd = this.input.keyboard.addKeys("W,A,S,D");
+
+          this.rain = mkRain(this, 165, 130);
+          mkVignette(this, 180);
+          mkBars(this, 600);
+          this.grain = mkGrain(this, 550);
+
+          this.cameras.main.fadeIn(2500);
+
+          // ── Curiosity-driven hint sequence (distance triggered) ──
+          this.hints = [
+            { x: 60, text: "The storm came suddenly tonight." },
+            { x: 380, text: "Strange... the streetlamps never lit." },
+            { x: 700, text: "Even the old lamp posts here have gone dark." },
+            {
+              x: 1050,
+              text: "Someone built these ruins long before the city existed.",
+            },
+            {
+              x: 1450,
+              text: "Everything that once carried power... is silent now.",
+            },
+            {
+              x: 1550,
+              text: "A cat... sleeping so soundly, even in this storm.",
+            },
+            { x: 2250, text: "There — a warm light. The only one for miles." },
+            { x: 2700, text: "That tree... it wasn't glowing a moment ago." },
+            { x: 3150, text: "It feels like it's been waiting." },
+            { x: 3550, text: "I should see what's inside." },
+          ];
+          this.hintsShown = new Set();
+
+          // ── Tree-puzzle state ──
+          this.puzzleSolved = false;
+          this.puzzleOpen = false;
+          this.lockedHintShown = false;
+          this.eKey = this.input.keyboard.addKey("E");
+
+          // ── Toy-mouse questline state ──
+          this.collected = {
+            battery: false,
+            mouseHead: false,
+            mouseTail: false,
+          };
+          this.collectedCount = 0;
+          this.catAwake = false;
+          this.mousePuzzleOpen = false;
+          this.mousePuzzleSolved = false;
+          this.mouseSequenceStarted = false;
+          this.wakeCatTried = false;
+          this.inventoryText = null;
+
+          this.buildCollectibles();
+          this.buildHintButton();
+        }
+
+        // ── SKY: storm clouds + occasional lightning ──
+        buildSky() {
+          let base = this.add.graphics();
+          base.fillStyle(0x0a0c16, 1);
+          base.fillRect(0, 0, this.worldW, H);
+
+          if (this.textures.exists("skyStorm")) {
+            for (let i = 0; i < Math.ceil(this.worldW / 576) + 1; i++) {
+              this.add
+                .image(i * 576, 0, "skyStorm")
+                .setOrigin(0, 0)
+                .setDisplaySize(580, 360)
+                .setScrollFactor(0.04)
+                .setAlpha(0.85)
+                .setTint(0x8899bb);
+            }
+          }
+
+          this.time.addEvent({
+            delay: Phaser.Math.Between(9000, 18000),
+            loop: true,
+            callback: () => {
+              let flash = this.add
+                .rectangle(W / 2, H / 2, W, H, 0xaabbee, 0)
+                .setScrollFactor(0)
+                .setDepth(170);
+              this.tweens.add({
+                targets: flash,
+                alpha: { from: 0, to: 0.18 },
+                duration: 90,
+                yoyo: true,
+                onComplete: () => flash.destroy(),
+              });
+              if (this.cache.audio.exists("thunderSfx")) {
+                this.time.delayedCall(Phaser.Math.Between(300, 900), () => {
+                  this.sound.play("thunderSfx", { volume: 0.35 });
+                });
+              }
+            },
+          });
+        }
+
+        // ── Background tree silhouettes — parallax depth ──
+        buildParallaxTrees() {
+          let topKeys = [
+            "bgtop1",
+            "bgtop2",
+            "bgtop3",
+            "bgtop4",
+            "bgtop5",
+            "bgtop6",
+            "bgtop7",
+            "bgtop8",
+          ];
+          for (let x = -100; x < this.worldW + 300; x += 340) {
+            let key = topKeys[Phaser.Math.Between(0, topKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              this.add
+                .image(x, H - 250, key)
+                .setOrigin(0, 1)
+                .setDisplaySize(380, 240)
+                .setScrollFactor(0.18)
+                .setAlpha(0.5)
+                .setTint(0x222840);
+            }
+          }
+          let treeKeys = [
+            "bgtree1",
+            "bgtree2",
+            "bgtree3",
+            "bgtree4",
+            "bgtree5",
+            "bgtree6",
+            "bgtree7",
+            "bgtree8",
+            "bgtree9",
+          ];
+          for (
+            let x = -50;
+            x < this.worldW + 200;
+            x += Phaser.Math.Between(180, 260)
+          ) {
+            let key = treeKeys[Phaser.Math.Between(0, treeKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              let h = Phaser.Math.Between(220, 340);
+              this.add
+                .image(x, this.gY + 4, key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(h * 0.5, h)
+                .setScrollFactor(0.35)
+                .setAlpha(0.6)
+                .setTint(0x161e30);
+            }
+          }
+        }
+
+        // ── Ground with grass-top platform texture ──
+        buildGround() {
+          let g = this.add.graphics();
+          // Gradient from dark soil at surface to near-black at bottom — avoids flat black void
+          g.fillGradientStyle(
+            0x1c2410,
+            0x1c2410,
+            0x05060a,
+            0x05060a,
+            1,
+            1,
+            1,
+            1,
+          );
+          g.fillRect(0, this.gY, this.worldW, H - this.gY);
+          g.fillStyle(0x141a0c, 1);
+          g.fillRect(0, this.gY, this.worldW, 8);
+
+          let groundKeys = [
+            "fground5",
+            "fground6",
+            "fground7",
+            "fground8",
+            "fground9",
+          ];
+          for (let x = 0; x < this.worldW; x += 220) {
+            let key = groundKeys[Phaser.Math.Between(0, groundKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              this.add
+                .image(x, this.gY + 6, key)
+                .setOrigin(0, 1)
+                .setDisplaySize(230, 40)
+                .setAlpha(0.55)
+                .setDepth(2);
+            }
+          }
+
+          let grassKeys = ["fgrass1", "fgrass2", "fgrass3", "fgrass4"];
+          for (let x = 20; x < this.worldW; x += Phaser.Math.Between(50, 110)) {
+            let key = grassKeys[Phaser.Math.Between(0, grassKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              this.add
+                .image(x, this.gY + 2, key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(
+                  Phaser.Math.Between(14, 26),
+                  Phaser.Math.Between(28, 46),
+                )
+                .setAlpha(0.85)
+                .setDepth(6)
+                .setTint(0x445533);
+            }
+          }
+        }
+
+        // ── Ruins, pillars, stones, mushrooms, bushes, trees — storytelling scatter ──
+        buildRuinsAndDecor() {
+          if (this.textures.exists("ruin2")) {
+            this.add
+              .image(520, this.gY + 4, "ruin2")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(290, 210)
+              .setDepth(8)
+              .setTint(0x3a3f55)
+              .setAlpha(0.85);
+          }
+          if (this.textures.exists("ruin3")) {
+            this.add
+              .image(800, this.gY + 4, "ruin3")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(220, 200)
+              .setDepth(7)
+              .setTint(0x343850)
+              .setAlpha(0.8);
+          }
+          if (this.textures.exists("ruin1")) {
+            this.add
+              .image(1080, this.gY + 4, "ruin1")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(200, 200)
+              .setDepth(7)
+              .setTint(0x383c52)
+              .setAlpha(0.8);
+          }
+
+          let mpillarKeys = [
+            "mpillar1",
+            "mpillar2",
+            "mpillar3",
+            "mpillar4",
+            "mpillar5",
+            "mpillar6",
+            "mpillar7",
+          ];
+          [260, 950, 1620, 2380, 3050, 3700].forEach((x, i) => {
+            let key = mpillarKeys[i % mpillarKeys.length];
+            if (this.textures.exists(key)) {
+              this.add
+                .image(x, this.gY + 4, key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(
+                  Phaser.Math.Between(70, 110),
+                  Phaser.Math.Between(50, 80),
+                )
+                .setDepth(6)
+                .setTint(0x3c4258)
+                .setAlpha(0.75);
+            }
+          });
+
+          if (this.textures.exists("pillar1")) {
+            this.add
+              .image(1380, this.gY + 4, "pillar1")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(280, 84)
+              .setDepth(7)
+              .setTint(0x40455c)
+              .setAlpha(0.8);
+          }
+          if (this.textures.exists("pillar2")) {
+            this.add
+              .image(2920, this.gY + 4, "pillar2")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(300, 105)
+              .setDepth(7)
+              .setTint(0x40455c)
+              .setAlpha(0.8);
+          }
+
+          let stoneKeys = [
+            "fstone1",
+            "fstone2",
+            "fstone3",
+            "fstone4",
+            "fstone5",
+            "fstone6",
+            "fstone7",
+          ];
+          for (let i = 0; i < 14; i++) {
+            let x = Phaser.Math.Between(150, this.worldW - 150);
+            let key = stoneKeys[Phaser.Math.Between(0, stoneKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              this.add
+                .image(x, this.gY + 4, key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(
+                  Phaser.Math.Between(26, 50),
+                  Phaser.Math.Between(16, 30),
+                )
+                .setDepth(5)
+                .setTint(0x4a5068)
+                .setAlpha(0.7);
+            }
+          }
+
+          let mushKeys = ["mushroom1", "mushroom2", "mushroom3"];
+          [430, 1240, 2060, 2880, 3420].forEach((x) => {
+            let key = mushKeys[Phaser.Math.Between(0, mushKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              this.add
+                .image(x, this.gY + 2, key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(
+                  Phaser.Math.Between(24, 38),
+                  Phaser.Math.Between(16, 26),
+                )
+                .setDepth(6)
+                .setTint(0x554840)
+                .setAlpha(0.8);
+            }
+          });
+
+          let bushKeys = ["fbush1", "fbush2", "fbush3"];
+          for (
+            let x = 100;
+            x < this.worldW;
+            x += Phaser.Math.Between(280, 420)
+          ) {
+            let key = bushKeys[Phaser.Math.Between(0, bushKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              this.add
+                .image(x, this.gY + 6, key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(
+                  Phaser.Math.Between(60, 100),
+                  Phaser.Math.Between(40, 68),
+                )
+                .setDepth(56)
+                .setTint(0x2e3a28)
+                .setAlpha(0.9);
+            }
+          }
+
+          // Different types of trees scattered — varied silhouettes
+          let deadTreeKeys = ["ftree3", "ftree4", "ftree5"];
+          let liveTreeKeys = ["ftree1", "ftree2"];
+          let treePositions = [
+            180, 640, 1180, 1750, 2180, 2620, 3080, 3520, 3900,
+          ];
+          treePositions.forEach((x, i) => {
+            let isLive = i % 4 === 1;
+            let key = isLive
+              ? liveTreeKeys[Phaser.Math.Between(0, liveTreeKeys.length - 1)]
+              : deadTreeKeys[Phaser.Math.Between(0, deadTreeKeys.length - 1)];
+            if (this.textures.exists(key)) {
+              let h = Phaser.Math.Between(280, 420);
+              let img = this.add
+                .image(x, this.gY + 4, key)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(h * 0.6, h)
+                .setDepth(isLive ? 4 : 9)
+                .setAlpha(isLive ? 0.55 : 0.92);
+              if (!isLive) img.setTint(0x14161e);
+              else img.setTint(0x2a3322).setAlpha(0.5);
+            }
+          });
+
+          if (this.textures.exists("board1")) {
+            this.add
+              .image(2480, this.gY + 2, "board1")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(70, 90)
+              .setDepth(8)
+              .setTint(0x4a3c28)
+              .setAlpha(0.85);
+          }
+          if (this.textures.exists("board2")) {
+            this.add
+              .image(3260, this.gY + 2, "board2")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(60, 80)
+              .setDepth(8)
+              .setTint(0x4a3c28)
+              .setAlpha(0.85);
+          }
+
+          // Dead lampposts — foreshadow the electricity theme
+          [560, 1900, 3300].forEach((x) => this.drawDeadLamp(x, this.gY));
+        }
+
+        drawDeadLamp(x, y) {
+          let g = this.add.graphics().setDepth(10);
+          g.fillStyle(0x1c1e28, 1);
+          g.fillRect(x - 3, y - 150, 6, 150);
+          g.fillRect(x - 30, y - 150, 30, 5);
+          g.fillStyle(0x181a22, 1);
+          g.fillRect(x - 38, y - 158, 18, 12);
+
+          // Very faint dead glass glint — flickers once, hints "almost alive"
+          let glint = this.add.graphics().setDepth(11);
+          this.time.addEvent({
+            delay: Phaser.Math.Between(8000, 16000),
+            loop: true,
+            callback: () => {
+              glint.clear();
+              glint.fillStyle(0x556688, 0.18);
+              glint.fillRect(x - 38, y - 158, 18, 12);
+              this.tweens.add({
+                targets: glint,
+                alpha: { from: 1, to: 0 },
+                duration: 600,
+              });
+            },
+          });
+        }
+
+        // ── THE TREE (treehouse.png) — the portal ──
+        buildTree() {
+          this.treeX = 3950;
+          this.treeY = this.gY;
+
+          if (this.textures.exists("treehouse")) {
+            this.treeImg = this.add
+              .image(this.treeX, this.treeY + 4, "treehouse")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(430, 403)
+              .setDepth(20);
+          } else {
+            let g = this.add.graphics().setDepth(20);
+            g.fillStyle(0x14100c, 1);
+            g.fillRect(this.treeX - 25, this.treeY - 380, 50, 380);
+          }
+
+          // Approximate portal hole location (door area on treehouse art)
+          this.holeX = this.treeX + 38;
+          this.holeY = this.treeY - 60;
+
+          // Glow pulsing — starts faint, ramps as player approaches
+          this.glowG = this.add.graphics().setDepth(21);
+          this.glowIntensity = 0;
+          this.time.addEvent({
+            delay: 30,
+            loop: true,
+            callback: () => {
+              let v = (Math.sin(Date.now() * 0.0018) + 1) / 2;
+              let amp = this.glowIntensity;
+              this.glowG.clear();
+              this.glowG.fillStyle(0xb05808, 0.05 * v * amp);
+              this.glowG.fillEllipse(this.holeX, this.holeY, 240, 130);
+              this.glowG.fillStyle(0xc86c10, 0.1 * v * amp);
+              this.glowG.fillEllipse(this.holeX, this.holeY, 140, 75);
+              this.glowG.fillStyle(0xdc8420, 0.2 * v * amp);
+              this.glowG.fillEllipse(this.holeX, this.holeY, 75, 40);
+              this.glowG.fillStyle(0xf09c3a, 0.4 * v * amp);
+              this.glowG.fillEllipse(this.holeX, this.holeY, 36, 20);
+            },
+          });
+
+          // Fireflies near tree
+          if (this.textures.exists("fireflies")) {
+            for (let i = 0; i < 5; i++) {
+              let fx = this.treeX + Phaser.Math.Between(-180, 100);
+              let fy = this.gY - Phaser.Math.Between(40, 220);
+              let fly = this.add
+                .image(fx, fy, "fireflies")
+                .setDisplaySize(10, 5)
+                .setDepth(22)
+                .setAlpha(0);
+              this.tweens.add({
+                targets: fly,
+                alpha: { from: 0, to: Phaser.Math.FloatBetween(0.4, 0.9) },
+                duration: Phaser.Math.Between(800, 1600),
+                yoyo: true,
+                repeat: -1,
+                delay: Phaser.Math.Between(0, 2000),
+              });
+              this.tweens.add({
+                targets: fly,
+                x: fx + Phaser.Math.Between(-40, 40),
+                y: fy + Phaser.Math.Between(-30, 30),
+                duration: Phaser.Math.Between(4000, 7000),
+                yoyo: true,
+                repeat: -1,
+                ease: "Sine.InOut",
+              });
+            }
+          }
+        }
+
+        // ── Sleeping cat — stays asleep until the toy mouse wakes it ──
+        buildCat() {
+          this.catX = 1620;
+          this.cat = this.add
+            .sprite(this.catX, this.gY - 2, "cat")
+            .setOrigin(0.5, 1)
+            .setDepth(54);
+          this.cat.setDisplaySize(56, 56);
+          this.cat.play("anim_cat_sleep");
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // COLLECTIBLES — Battery, Motor, Toy Mouse Body (drawn as icons)
+        // Spread across distinct zones of the map so they don't feel like
+        // a single cluster, with a soft glow ring under each for findability.
+        // ════════════════════════════════════════════════════════════
+        buildCollectibles() {
+          // Battery — near the dead street lamp, early in the level
+          this.batteryX = 560;
+          this.batteryY = this.gY - 2;
+          this.buildGlowMarker(this.batteryX, this.batteryY);
+          this.batteryBeacon = this.buildItemBeacon(
+            this.batteryX,
+            this.batteryY,
+          );
+          this.batteryG = this.add.graphics().setDepth(30);
+          this.drawBatteryIcon(
+            this.batteryG,
+            this.batteryX,
+            this.batteryY,
+            1.4,
+          );
+          this.tweens.add({
+            targets: this.batteryG,
+            y: "-=6",
+            duration: 1100,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.InOut",
+          });
+
+          // Head of the mouse — deeper inside the ruins, a separate landmark
+          this.mouseHeadX = 1080;
+          this.mouseHeadY = this.gY - 2;
+          this.buildGlowMarker(this.mouseHeadX, this.mouseHeadY);
+          this.mouseHeadBeacon = this.buildItemBeacon(
+            this.mouseHeadX,
+            this.mouseHeadY,
+          );
+          this.mouseHeadG = this.add.graphics().setDepth(30);
+          this.drawMouseHeadIcon(
+            this.mouseHeadG,
+            this.mouseHeadX,
+            this.mouseHeadY,
+            1.4,
+          );
+          this.tweens.add({
+            targets: this.mouseHeadG,
+            y: "-=6",
+            duration: 1300,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.InOut",
+          });
+
+          // Tail of the mouse — near the sleeping cat, but offset into the open field beside it
+          this.mouseTailX = this.catX - 140;
+          this.mouseTailY = this.gY - 2;
+          this.buildGlowMarker(this.mouseTailX, this.mouseTailY);
+          this.mouseTailBeacon = this.buildItemBeacon(
+            this.mouseTailX,
+            this.mouseTailY,
+          );
+          this.mouseTailG = this.add.graphics().setDepth(30);
+          this.drawMouseTailIcon(
+            this.mouseTailG,
+            this.mouseTailX,
+            this.mouseTailY,
+            1.4,
+          );
+          this.tweens.add({
+            targets: this.mouseTailG,
+            y: "-=6",
+            duration: 1200,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.InOut",
+          });
+        }
+
+        // Soft pulsing glow ring on the ground beneath a collectible — helps it stand out
+        buildGlowMarker(x, y) {
+          let g = this.add.graphics().setDepth(29);
+          g.fillStyle(0xd4a850, 0.16);
+          g.fillEllipse(x, y + 2, 60, 16);
+          this.tweens.add({
+            targets: g,
+            alpha: { from: 0.4, to: 1 },
+            duration: 1400,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.InOut",
+          });
+          return g;
+        }
+
+        // Small floating glint above a collectible, visible from a distance,
+        // hinting "something is here" without saying what it is or what to do.
+        buildItemBeacon(x, y) {
+          let beacon = this.add
+            .text(x, y - 56, "✦", {
+              fontFamily: "EB Garamond",
+              fontSize: "16px",
+              color: "#e8c878",
+            })
+            .setOrigin(0.5)
+            .setDepth(31);
+          this.tweens.add({
+            targets: beacon,
+            y: y - 64,
+            alpha: { from: 0.35, to: 0.95 },
+            duration: 1300,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.InOut",
+          });
+          return beacon;
+        }
+
+        // ── Icon drawing helpers (graphics-based, no sprites needed) ──
+        drawBatteryIcon(g, x, y, scale) {
+          g.clear();
+          let w = 34 * scale,
+            h = 20 * scale;
+          // body
+          g.fillStyle(0x3a3a3a, 1);
+          g.fillRoundedRect(x - w / 2, y - h - 4, w, h, 3);
+          // + terminal (right, red)
+          g.fillStyle(0xdd4433, 1);
+          g.fillRect(x + w / 2 - 2, y - h - 4 + h / 2 - 6, 6, 12);
+          g.fillRect(x + w / 2 + 1, y - h - 4 + h / 2 - 2, 4, 4);
+          // - terminal (left, dark)
+          g.fillStyle(0x222222, 1);
+          g.fillRect(x - w / 2 - 4, y - h - 4 + h / 2 - 2, 4, 4);
+          // stripe
+          g.fillStyle(0xe8c860, 1);
+          g.fillRect(x - w / 2 + 4, y - h - 4 + 3, w - 8, 4);
+        }
+
+        drawMotorIcon(g, x, y, scale) {
+          g.clear();
+          let r = 12 * scale,
+            bodyY = y - r - 4;
+          // cylinder body
+          g.fillStyle(0x5a6072, 1);
+          g.fillRoundedRect(x - r, bodyY - r, r * 2, r * 2, 4);
+          // end cap highlight
+          g.fillStyle(0x7a8294, 1);
+          g.fillRect(x - r, bodyY - r, 5 * scale, r * 2);
+          // shaft
+          g.fillStyle(0xc8c8c8, 1);
+          g.fillRect(x + r, bodyY - 2 * scale, 10 * scale, 4 * scale);
+          // shaft tip
+          g.fillStyle(0xeeeeee, 1);
+          g.fillCircle(x + r + 10 * scale, bodyY, 2.5 * scale);
+        }
+
+        drawMouseBodyIcon(g, x, y, scale, flipX) {
+          g.clear();
+          let dir = flipX ? -1 : 1;
+          let bw = 26 * scale,
+            bh = 16 * scale,
+            cy = y - bh / 2 - 4;
+          // body (rounded blob)
+          g.fillStyle(0xb8a888, 1);
+          g.fillEllipse(x, cy, bw, bh);
+          // ears
+          g.fillStyle(0xc8b898, 1);
+          g.fillEllipse(
+            x - bw * 0.28 * dir,
+            cy - bh * 0.55,
+            8 * scale,
+            8 * scale,
+          );
+          g.fillEllipse(
+            x + bw * 0.05 * dir,
+            cy - bh * 0.6,
+            8 * scale,
+            8 * scale,
+          );
+          // tail
+          g.lineStyle(2, 0xb8a888, 1);
+          g.beginPath();
+          g.moveTo(x + bw * 0.5 * dir, cy);
+          g.lineTo(x + (bw * 0.5 + 14 * scale) * dir, cy + 4 * scale);
+          g.strokePath();
+          // eye
+          g.fillStyle(0x222222, 1);
+          g.fillCircle(x - bw * 0.18 * dir, cy - 1, 1.6 * scale);
+        }
+
+        // Front half of the toy mouse — head, ears, eye, snout
+        drawMouseHeadIcon(g, x, y, scale) {
+          g.clear();
+          let bw = 24 * scale,
+            bh = 16 * scale,
+            cy = y - bh / 2 - 4;
+          // head/front body (half ellipse-ish blob)
+          g.fillStyle(0xb8a888, 1);
+          g.fillEllipse(x, cy, bw, bh);
+          // ears
+          g.fillStyle(0xc8b898, 1);
+          g.fillEllipse(x - bw * 0.3, cy - bh * 0.55, 8 * scale, 8 * scale);
+          g.fillEllipse(x + bw * 0.02, cy - bh * 0.6, 8 * scale, 8 * scale);
+          // snout
+          g.fillStyle(0xd8c8a8, 1);
+          g.fillEllipse(x - bw * 0.55, cy + bh * 0.1, 8 * scale, 7 * scale);
+          // eye
+          g.fillStyle(0x222222, 1);
+          g.fillCircle(x - bw * 0.2, cy - 1, 1.6 * scale);
+          // nose
+          g.fillStyle(0xdd6688, 1);
+          g.fillCircle(x - bw * 0.62, cy + bh * 0.05, 1.4 * scale);
+        }
+
+        // Back half of the toy mouse — hindquarters + tail
+        drawMouseTailIcon(g, x, y, scale) {
+          g.clear();
+          let bw = 22 * scale,
+            bh = 15 * scale,
+            cy = y - bh / 2 - 4;
+          // hind body
+          g.fillStyle(0xa89878, 1);
+          g.fillEllipse(x, cy, bw, bh);
+          // tail
+          g.lineStyle(2.5 * scale, 0xa89878, 1);
+          g.beginPath();
+          g.moveTo(x + bw * 0.45, cy);
+          g.lineTo(x + bw * 0.45 + 16 * scale, cy + 5 * scale);
+          g.lineTo(x + bw * 0.45 + 22 * scale, cy - 2 * scale);
+          g.strokePath();
+          // rear foot stub
+          g.fillStyle(0x988868, 1);
+          g.fillEllipse(x - bw * 0.2, cy + bh * 0.45, 6 * scale, 4 * scale);
+        }
+
+        // ── Generic item pickup check ──
+        // `descLabel` is the ambient flavor name shown when the player is near
+        // but not yet close enough to interact (e.g. "Head of an electrical mouse").
+        // `pickupLabel` is the short name used in the [E] prompt and notifications.
+        checkItemPickup(px, py, key, itemX, pickupLabel, descLabel) {
+          if (this.collected[key]) {
+            this.hideItemLabel(key);
+            return;
+          }
+          let nearRange = Math.abs(px - itemX) < 150 && py >= this.gY;
+          let pickupRange = Math.abs(px - itemX) < 60 && py >= this.gY;
+
+          if (nearRange) {
+            this.showItemLabel(key, itemX, descLabel);
+          } else {
+            this.hideItemLabel(key);
+          }
+
+          if (pickupRange) {
+            this.showPuzzlePrompt("[E]  Pick Up " + pickupLabel);
+            if (this.puzzlePrompt) {
+              this.puzzlePrompt.x = px - this.cameras.main.scrollX;
+              this.puzzlePrompt.y = py - PLAYER_H - 22;
+            }
+            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              this.collected[key] = true;
+              this.collectedCount++;
+              if (key === "battery") {
+                this.batteryG.setVisible(false);
+                this.batteryBeacon.setVisible(false);
+              }
+              if (key === "mouseHead") {
+                this.mouseHeadG.setVisible(false);
+                this.mouseHeadBeacon.setVisible(false);
+              }
+              if (key === "mouseTail") {
+                this.mouseTailG.setVisible(false);
+                this.mouseTailBeacon.setVisible(false);
+              }
+              this.hideItemLabel(key);
+              this.updateInventory();
+              this.showHint(
+                pickupLabel +
+                  " Collected (" +
+                  this.collectedCount +
+                  "/3 Toy Mouse Parts)",
+              );
+              this.hidePuzzlePrompt();
+            }
+          }
+        }
+
+        // Ambient floating label above an item, shown while the player is nearby
+        // but hasn't picked it up yet (purely descriptive — no instructions).
+        showItemLabel(key, itemX, descLabel) {
+          if (!this.itemLabels) this.itemLabels = {};
+          if (this.itemLabels[key]) return;
+          let itemY = this.gY - 80;
+          this.itemLabels[key] = this.add
+            .text(itemX - this.cameras.main.scrollX, itemY, descLabel, {
+              fontFamily: "EB Garamond",
+              fontStyle: "italic",
+              fontSize: "14px",
+              color: "#cdbfa0",
+              backgroundColor: "#00000088",
+              padding: { x: 6, y: 3 },
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(310)
+            .setAlpha(0);
+          this.tweens.add({
+            targets: this.itemLabels[key],
+            alpha: 1,
+            duration: 400,
+          });
+        }
+
+        hideItemLabel(key) {
+          if (this.itemLabels && this.itemLabels[key]) {
+            this.itemLabels[key].destroy();
+            this.itemLabels[key] = null;
+          }
+        }
+
+        updateInventory() {
+          if (this.inventoryText) this.inventoryText.destroy();
+          if (this.collectedCount === 0) return;
+          let parts = [];
+          if (this.collected.battery) parts.push("🔋 Battery");
+          if (this.collected.mouseHead) parts.push("🐭 Mouse Head");
+          if (this.collected.mouseTail) parts.push("🐭 Mouse Tail");
+          this.inventoryText = this.add
+            .text(16, 16, parts.join("   "), {
+              fontFamily: "EB Garamond",
+              fontSize: "14px",
+              color: "#7a8ea0",
+              backgroundColor: "#00000099",
+              padding: { x: 8, y: 5 },
+            })
+            .setScrollFactor(0)
+            .setDepth(320);
+        }
+
+        // ── Persistent Hint button (top-right) — context-aware nudge ──
+        buildHintButton() {
+          this.hintBtn = this.add
+            .text(W - 20, 20, "? Hint", {
+              fontFamily: "EB Garamond",
+              fontSize: "14px",
+              color: "#7a8ea0",
+              backgroundColor: "#00000099",
+              padding: { x: 10, y: 6 },
+            })
+            .setOrigin(1, 0)
+            .setScrollFactor(0)
+            .setDepth(320)
+            .setInteractive({ useHandCursor: true });
+
+          this.hintBtn.on("pointerover", () =>
+            this.hintBtn.setColor("#ffffff"),
+          );
+          this.hintBtn.on("pointerout", () => this.hintBtn.setColor("#7a8ea0"));
+          this.hintBtn.on("pointerdown", () => this.showContextHint());
+        }
+
+        // Gives the player a nudge based on current quest progress, without
+        // ever stating exactly *what* to do mechanically.
+        showContextHint() {
+          if (this.triggered || this.puzzleOpen || this.mousePuzzleOpen) return;
+
+          if (this.puzzleSolved) {
+            this.showHint("The way down is open.");
+          } else if (this.mousePuzzleSolved) {
+            this.showHint(
+              "The tree feels different now. Maybe it's worth a closer look.",
+            );
+          } else if (this.collectedCount >= 3) {
+            this.showHint("Go to the cat.");
+          } else if (this.collectedCount > 0) {
+            this.showHint("There may be more scattered pieces nearby.");
+          } else {
+            this.showHint("Something out here doesn't feel quite right.");
+          }
+        }
+        // ── Ambient fireflies scattered across the field ──
+        buildFireflies() {
+          if (!this.textures.exists("fireflies")) return;
+          for (let i = 0; i < 10; i++) {
+            let fx = Phaser.Math.Between(200, this.worldW - 200);
+            let fy = this.gY - Phaser.Math.Between(20, 160);
+            let fly = this.add
+              .image(fx, fy, "fireflies")
+              .setDisplaySize(8, 4)
+              .setDepth(50)
+              .setAlpha(0);
+            this.tweens.add({
+              targets: fly,
+              alpha: { from: 0, to: Phaser.Math.FloatBetween(0.2, 0.5) },
+              duration: Phaser.Math.Between(1200, 2400),
+              yoyo: true,
+              repeat: -1,
+              delay: Phaser.Math.Between(0, 3000),
+            });
+            this.tweens.add({
+              targets: fly,
+              x: fx + Phaser.Math.Between(-60, 60),
+              y: fy + Phaser.Math.Between(-40, 40),
+              duration: Phaser.Math.Between(5000, 9000),
+              yoyo: true,
+              repeat: -1,
+              ease: "Sine.InOut",
+            });
+          }
+        }
+
+        // Queue-based subtitle system — only one hint visible at a time, prevents overlap
+        showHint(text) {
+          if (!this.hintQueue) this.hintQueue = [];
+          this.hintQueue.push(text);
+          if (!this.hintActive) this._playNextHint();
+        }
+
+        _playNextHint() {
+          if (!this.hintQueue || this.hintQueue.length === 0) {
+            this.hintActive = false;
+            return;
+          }
+          this.hintActive = true;
+          let text = this.hintQueue.shift();
+          let t = this.add
+            .text(W / 2, H - 86, text, {
+              fontFamily: "EB Garamond",
+              fontStyle: "italic",
+              fontSize: "19px",
+              color: "#7a8da0",
+              align: "center",
+              wordWrap: { width: W - 300 },
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(400)
+            .setAlpha(0);
+          this.tweens.add({
+            targets: t,
+            alpha: 1,
+            duration: 700,
+            onComplete: () => {
+              this.time.delayedCall(3000, () => {
+                this.tweens.add({
+                  targets: t,
+                  alpha: 0,
+                  duration: 600,
+                  onComplete: () => {
+                    t.destroy();
+                    this._playNextHint();
+                  },
+                });
+              });
+            },
+          });
+        }
+
+        showPuzzlePrompt(text) {
+          text = text || "[E]  Restore the circuit";
+          let sx = this.player.x - this.cameras.main.scrollX;
+          let sy = this.player.y - PLAYER_H - 22;
+          if (this.puzzlePrompt) {
+            if (this.puzzlePrompt.text !== text)
+              this.puzzlePrompt.setText(text);
+            return;
+          }
+          this.puzzlePrompt = this.add
+            .text(sx, sy, text, {
+              fontFamily: "EB Garamond",
+              fontSize: "14px",
+              color: "#aabbcc",
+              backgroundColor: "#00000099",
+              padding: { x: 8, y: 4 },
+            })
+            .setOrigin(0.5)
+            .setDepth(320)
+            .setScrollFactor(0);
+        }
+
+        hidePuzzlePrompt() {
+          if (this.puzzlePrompt) {
+            this.puzzlePrompt.destroy();
+            this.puzzlePrompt = null;
+          }
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // PIPE PUZZLE — 5x5 grid, 1 source (green), connect to all targets (yellow)
+        // ════════════════════════════════════════════════════════════
+        openPuzzle() {
+          this.puzzleOpen = true;
+          this.hidePuzzlePrompt();
+
+          const COLS = 5,
+            ROWS = 5,
+            CELL = 72,
+            BOARD_W = COLS * CELL,
+            BOARD_H = ROWS * CELL,
+            originX = W / 2 - BOARD_W / 2,
+            originY = H / 2 - BOARD_H / 2;
+
+          this._puzzleGeom = { originX, originY, BOARD_W, BOARD_H, CELL };
+          this.puzzleZones = [];
+
+          // Direction bit flags
+          const N = 1,
+            E = 2,
+            S = 4,
+            Wd = 8;
+          const OPP = { 1: 4, 4: 1, 2: 8, 8: 2 };
+          const DX = { 1: 0, 2: 1, 4: 0, 8: -1 };
+          const DY = { 1: -1, 2: 0, 4: 1, 8: 0 };
+
+          // Fixed solution layout (row, col) — connections each cell needs when SOLVED
+          // S at (2,0), targets at (0,4) and (4,4) and (4,0)
+          // Hand-authored paths so every cell on a path has exactly the right connections.
+          let solved = {};
+          const key = (r, c) => r + "_" + c;
+          const addConn = (r, c, dir) => {
+            solved[key(r, c)] = (solved[key(r, c)] || 0) | dir;
+          };
+          const link = (r1, c1, r2, c2) => {
+            if (r2 === r1 - 1) {
+              addConn(r1, c1, N);
+              addConn(r2, c2, S);
+            } else if (r2 === r1 + 1) {
+              addConn(r1, c1, S);
+              addConn(r2, c2, N);
+            } else if (c2 === c1 + 1) {
+              addConn(r1, c1, E);
+              addConn(r2, c2, Wd);
+            } else if (c2 === c1 - 1) {
+              addConn(r1, c1, Wd);
+              addConn(r2, c2, E);
+            }
+          };
+
+          // Source
+          const startCell = { r: 2, c: 0 };
+          // Targets
+          const targets = [
+            { r: 0, c: 4 },
+            { r: 4, c: 4 },
+            { r: 4, c: 0 },
+          ];
+
+          // Path 1: (2,0) -> (2,2) -> (0,2) -> (0,4)
+          link(2, 0, 2, 1);
+          link(2, 1, 2, 2);
+          link(2, 2, 1, 2);
+          link(1, 2, 0, 2);
+          link(0, 2, 0, 3);
+          link(0, 3, 0, 4);
+
+          // Path 2: (2,2) -> (3,2) -> (4,2) -> (4,3) -> (4,4)
+          link(2, 2, 3, 2);
+          link(3, 2, 4, 2);
+          link(4, 2, 4, 3);
+          link(4, 3, 4, 4);
+
+          // Path 3: (2,1) -> (3,1) -> (4,1) -> (4,0)
+          link(2, 1, 3, 1);
+          link(3, 1, 4, 1);
+          link(4, 1, 4, 0);
+
+          // Build cell list (only cells that are part of the solution carry pipes)
+          this.puzzleCells = [];
+          for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+              let conn = solved[key(r, c)];
+              if (!conn) continue;
+              let isStart = r === startCell.r && c === startCell.c;
+              let isTarget = targets.some((t) => t.r === r && t.c === c);
+              // Random initial rotation for interior pipes; start/target stubs must
+              // stay fixed (rot 0) so their single connector points the correct
+              // pre-authored direction toward the rest of the circuit.
+              let rot = isStart || isTarget ? 0 : Phaser.Math.Between(1, 3);
+              this.puzzleCells.push({
+                r,
+                c,
+                solvedConn: conn,
+                rot,
+                isStart,
+                isTarget,
+              });
+            }
+          }
+
+          // ── Overlay backdrop ──
+          this.puzzleOverlay = this.add
+            .graphics()
+            .setScrollFactor(0)
+            .setDepth(700);
+          this.puzzleOverlay.fillStyle(0x000000, 0.78);
+          this.puzzleOverlay.fillRect(0, 0, W, H);
+
+          this.puzzleContainer = this.add
+            .container(0, 0)
+            .setScrollFactor(0)
+            .setDepth(701);
+
+          // Title
+          let title = this.add
+            .text(W / 2, originY - 50, "Restore the Circuit", {
+              fontFamily: "Cinzel",
+              fontSize: "26px",
+              color: "#c8a050",
+            })
+            .setOrigin(0.5);
+          this.puzzleContainer.add(title);
+
+          let subtitle = this.add
+            .text(
+              W / 2,
+              originY - 20,
+              "Click a pipe to rotate it. Connect the green source to every yellow node.",
+              {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "15px",
+                color: "#8a9aac",
+              },
+            )
+            .setOrigin(0.5);
+          this.puzzleContainer.add(subtitle);
+
+          // Board background grid
+          let boardBg = this.add.graphics();
+          boardBg.fillStyle(0x10141c, 0.92);
+          boardBg.fillRoundedRect(
+            originX - 14,
+            originY - 14,
+            BOARD_W + 28,
+            BOARD_H + 28,
+            10,
+          );
+          boardBg.lineStyle(2, 0x2a3850, 1);
+          for (let r = 0; r <= ROWS; r++) {
+            boardBg.lineBetween(
+              originX,
+              originY + r * CELL,
+              originX + BOARD_W,
+              originY + r * CELL,
+            );
+          }
+          for (let c = 0; c <= COLS; c++) {
+            boardBg.lineBetween(
+              originX + c * CELL,
+              originY,
+              originX + c * CELL,
+              originY + BOARD_H,
+            );
+          }
+          this.puzzleContainer.add(boardBg);
+
+          // Helper: draw a pipe cell graphic given rotated connection bitmask
+          const drawPipe = (g, conn, cx, cy, color) => {
+            g.clear();
+            let half = CELL / 2;
+            let thick = 12;
+            g.fillStyle(color, 1);
+            // center hub
+            g.fillCircle(cx, cy, thick * 0.8);
+            if (conn & N) g.fillRect(cx - thick / 2, cy - half, thick, half);
+            if (conn & S) g.fillRect(cx - thick / 2, cy, thick, half);
+            if (conn & E) g.fillRect(cx, cy - thick / 2, half, thick);
+            if (conn & Wd) g.fillRect(cx - half, cy - thick / 2, half, thick);
+          };
+
+          const rotateConn = (conn, steps) => {
+            // rotate bits clockwise: N->E->S->W->N
+            let order = [N, E, S, Wd];
+            let res = 0;
+            for (let i = 0; i < 4; i++) {
+              if (conn & order[i]) {
+                res |= order[(i + steps) % 4];
+              }
+            }
+            return res;
+          };
+
+          // Render each cell
+          this.puzzleCells.forEach((cell) => {
+            let cx = originX + cell.c * CELL + CELL / 2;
+            let cy = originY + cell.r * CELL + CELL / 2;
+
+            let g = this.add.graphics();
+            this.puzzleContainer.add(g);
+            cell.gfx = g;
+
+            const redraw = () => {
+              let curConn = rotateConn(cell.solvedConn, cell.rot);
+              cell.curConn = curConn;
+              let color = cell.isStart
+                ? 0x33dd66
+                : cell.isTarget
+                  ? 0xe0c050
+                  : 0xc87830;
+              drawPipe(g, curConn, cx, cy, color);
+            };
+            redraw();
+            cell._redraw = redraw;
+
+            // Node marker for start/target
+            if (cell.isStart) {
+              let ring = this.add.graphics();
+              ring.lineStyle(3, 0x33ee66, 1);
+              ring.strokeCircle(cx, cy, 16);
+              this.puzzleContainer.add(ring);
+            } else if (cell.isTarget) {
+              let ring = this.add.graphics();
+              ring.fillStyle(0xf0d060, 1);
+              ring.fillCircle(cx, cy, 11);
+              this.puzzleContainer.add(ring);
+              cell.targetRing = ring;
+            }
+
+            // Click zone (start and target end-stubs are fixed, not rotatable)
+            if (!cell.isStart && !cell.isTarget) {
+              let zone = this.add
+                .rectangle(cx, cy, CELL - 6, CELL - 6, 0xffffff, 0.001)
+                .setScrollFactor(0)
+                .setDepth(705)
+                .setInteractive({ useHandCursor: true });
+              this.puzzleZones.push(zone);
+              zone.on("pointerdown", () => {
+                cell.rot = (cell.rot + 1) % 4;
+                redraw();
+                this.checkPuzzleSolved(targets, key);
+              });
+              zone.on("pointerover", () => {
+                g.setAlpha(0.7);
+              });
+              zone.on("pointerout", () => {
+                g.setAlpha(1);
+              });
+            }
+          });
+
+          // Close button
+          let closeBtn = this.add
+            .text(originX + BOARD_W + 30, originY - 40, "✕", {
+              fontFamily: "EB Garamond",
+              fontSize: "26px",
+              color: "#8a9aac",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(705)
+            .setInteractive({ useHandCursor: true });
+          closeBtn.on("pointerdown", () => this.closePuzzle());
+          closeBtn.on("pointerover", () => closeBtn.setColor("#ffffff"));
+          closeBtn.on("pointerout", () => closeBtn.setColor("#8a9aac"));
+          this.puzzleZones.push(closeBtn);
+
+          this.puzzleSolvedText = null;
+
+          // store for solved-check
+          this._puzzleTargetsRef = targets;
+          this._puzzleKeyFn = key;
+          this._puzzleStartCell = startCell;
+        }
+
+        // BFS from start through connected pipe cells; solved if all targets reached
+        checkPuzzleSolved(targets, key) {
+          let cellMap = {};
+          this.puzzleCells.forEach((c) => (cellMap[key(c.r, c.c)] = c));
+
+          let start = this.puzzleCells.find((c) => c.isStart);
+          let visited = new Set();
+          let queue = [start];
+          visited.add(key(start.r, start.c));
+
+          const DIRS = [
+            { bit: 1, dr: -1, dc: 0, opp: 4 }, // N
+            { bit: 2, dr: 0, dc: 1, opp: 8 }, // E
+            { bit: 4, dr: 1, dc: 0, opp: 1 }, // S
+            { bit: 8, dr: 0, dc: -1, opp: 2 }, // W
+          ];
+
+          while (queue.length) {
+            let cur = queue.shift();
+            DIRS.forEach((d) => {
+              if (cur.curConn & d.bit) {
+                let nr = cur.r + d.dr,
+                  nc = cur.c + d.dc;
+                let nb = cellMap[key(nr, nc)];
+                if (nb && !visited.has(key(nr, nc)) && nb.curConn & d.opp) {
+                  visited.add(key(nr, nc));
+                  queue.push(nb);
+                }
+              }
+            });
+          }
+
+          let allConnected = targets.every((t) => visited.has(key(t.r, t.c)));
+
+          // Visual feedback on targets
+          let geom = this._puzzleGeom;
+          this.puzzleCells.forEach((c) => {
+            if (c.isTarget && c.targetRing) {
+              c.targetRing.clear();
+              c.targetRing.fillStyle(
+                visited.has(key(c.r, c.c)) ? 0x55ff88 : 0xf0d060,
+                1,
+              );
+              let cx = geom.originX + c.c * geom.CELL + geom.CELL / 2;
+              let cy = geom.originY + c.r * geom.CELL + geom.CELL / 2;
+              c.targetRing.fillCircle(cx, cy, 11);
+            }
+          });
+
+          if (allConnected && !this.puzzleSolved) {
+            this.solvePuzzle();
+          }
+        }
+
+        solvePuzzle() {
+          this.puzzleSolved = true;
+
+          // Flash success text
+          let geom = this._puzzleGeom;
+          let okText = this.add
+            .text(
+              W / 2,
+              geom.originY + geom.BOARD_H + 36,
+              "Circuit restored.",
+              {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "20px",
+                color: "#7adf9a",
+              },
+            )
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(702)
+            .setAlpha(0);
+          this.puzzleContainer.add(okText);
+          this.tweens.add({ targets: okText, alpha: 1, duration: 500 });
+
+          this.cameras.main.flash(380, 120, 255, 160, false);
+
+          this.time.delayedCall(1200, () => {
+            this.closePuzzle();
+            this.showHint("The hum returns. The way is open.");
+            this.glowIntensity = 1;
+          });
+        }
+
+        closePuzzle() {
+          this.puzzleOpen = false;
+          if (this.puzzleOverlay) {
+            this.puzzleOverlay.destroy();
+            this.puzzleOverlay = null;
+          }
+          if (this.puzzleContainer) {
+            this.puzzleContainer.destroy();
+            this.puzzleContainer = null;
+          }
+          if (this.puzzleZones) {
+            this.puzzleZones.forEach((z) => z.destroy());
+            this.puzzleZones = null;
+          }
+          this.puzzleCells = null;
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // TOY MOUSE PUZZLE — drag Battery / Switch / Motor into 3 loop
+        // slots. Correct closed-circuit order: Battery → Switch → Motor.
+        // ════════════════════════════════════════════════════════════
+        drawSwitchIcon(g, x, y, scale) {
+          g.clear();
+          let w = 30 * scale;
+          // base plate
+          g.fillStyle(0x4a4a4a, 1);
+          g.fillRoundedRect(x - w / 2, y - 8 * scale, w, 14 * scale, 3);
+          // lever (open position)
+          g.lineStyle(4 * scale, 0xcccccc, 1);
+          g.beginPath();
+          g.moveTo(x - w / 2 + 5 * scale, y - 1 * scale);
+          g.lineTo(x + w / 2 - 7 * scale, y - 10 * scale);
+          g.strokePath();
+          // pivot + contact dots
+          g.fillStyle(0xdd9933, 1);
+          g.fillCircle(x - w / 2 + 5 * scale, y - 1 * scale, 2.5 * scale);
+          g.fillCircle(x + w / 2 - 5 * scale, y - 1 * scale, 2.5 * scale);
+        }
+
+        openMousePuzzle() {
+          this.mousePuzzleOpen = true;
+          this.hidePuzzlePrompt();
+
+          const CX = W / 2,
+            CY = H / 2 - 20;
+          const BOX_W = 96,
+            BOX_H = 70;
+
+          // Layout (mirrors the hand-sketched recipe):
+          //   LEFT column = outputs (start empty, fill in as combos complete)
+          //     outBody  -> mouse body (head+tail combined)
+          //     outFinal -> final toy (mouse body + battery combined) = SOLVED
+          //   RIGHT column = input slots the player drags collected parts into
+          //     headSlot, tailSlot  -> combine into outBody
+          //     batterySlot          -> combines with outBody into outFinal
+          const outFinal = {
+            x: CX - 230,
+            y: CY - 90,
+            w: BOX_W + 20,
+            h: BOX_H + 10,
+            filled: null,
+          };
+          const outBody = {
+            x: CX - 230,
+            y: CY + 90,
+            w: BOX_W,
+            h: BOX_H,
+            filled: null,
+          };
+          const headSlot = {
+            x: CX + 140,
+            y: CY - 110,
+            w: BOX_W,
+            h: BOX_H,
+            filled: null,
+          };
+          const tailSlot = {
+            x: CX + 280,
+            y: CY - 110,
+            w: BOX_W,
+            h: BOX_H,
+            filled: null,
+          };
+          const batterySlot = {
+            x: CX + 210,
+            y: CY + 90,
+            w: BOX_W + 20,
+            h: BOX_H + 10,
+            filled: null,
+          };
+
+          this.mpOverlay = this.add.graphics().setScrollFactor(0).setDepth(700);
+          this.mpOverlay.fillStyle(0x000000, 0.85);
+          this.mpOverlay.fillRect(0, 0, W, H);
+
+          this.mpElements = [];
+
+          let title = this.add
+            .text(CX, CY - 200, "A Forgotten Toy", {
+              fontFamily: "Cinzel",
+              fontSize: "26px",
+              color: "#c8a050",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(701);
+          this.mpElements.push(title);
+
+          let subtitle = this.add
+            .text(CX, CY - 168, "Drag each part into place.", {
+              fontFamily: "EB Garamond",
+              fontStyle: "italic",
+              fontSize: "15px",
+              color: "#8a9aac",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(701);
+          this.mpElements.push(subtitle);
+
+          // Draw box outlines + "+" connectors
+          const drawBox = (box) => {
+            let g = this.add.graphics().setScrollFactor(0).setDepth(700);
+            g.lineStyle(2, 0xd96a78, 0.85);
+            g.strokeRoundedRect(
+              box.x - box.w / 2,
+              box.y - box.h / 2,
+              box.w,
+              box.h,
+              8,
+            );
+            this.mpElements.push(g);
+            box.outlineG = g;
+          };
+          [outFinal, outBody, headSlot, tailSlot, batterySlot].forEach(drawBox);
+
+          // "+" between head and tail
+          let plus1 = this.add
+            .text((headSlot.x + tailSlot.x) / 2, headSlot.y, "+", {
+              fontFamily: "EB Garamond",
+              fontSize: "28px",
+              color: "#d96a78",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(701);
+          this.mpElements.push(plus1);
+
+          // "+" between outBody and batterySlot
+          let plus2 = this.add
+            .text(
+              (outBody.x + batterySlot.x) / 2,
+              (outBody.y + batterySlot.y) / 2,
+              "+",
+              {
+                fontFamily: "EB Garamond",
+                fontSize: "28px",
+                color: "#d96a78",
+              },
+            )
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(701);
+          this.mpElements.push(plus2);
+
+          this.mpSlots = { outFinal, outBody, headSlot, tailSlot, batterySlot };
+
+          // Tray of draggable items along the bottom — the player's collected parts
+          const trayY = CY + 250;
+          const trayItems = ["mouseHead", "mouseTail", "battery"];
+          this.mpDraggables = [];
+          let shuffled = Phaser.Utils.Array.Shuffle(trayItems.slice());
+          shuffled.forEach((type, i) => {
+            let tx = CX - 130 + i * 130;
+            let g = this.add.graphics().setScrollFactor(0).setDepth(703);
+            this.drawMousePuzzleIcon(g, type, tx, trayY, 1.6);
+            this.mpElements.push(g);
+
+            // Invisible draggable handle (robust hit-testing)
+            let handle = this.add
+              .rectangle(tx, trayY, 90, 90, 0xffffff, 0.001)
+              .setScrollFactor(0)
+              .setDepth(704)
+              .setInteractive({ useHandCursor: true, draggable: true });
+            this.mpElements.push(handle);
+
+            let item = {
+              type,
+              g,
+              handle,
+              homeX: tx,
+              homeY: trayY,
+              x: tx,
+              y: trayY,
+              placedSlot: null,
+            };
+            this.mpDraggables.push(item);
+
+            handle.on("drag", (pointer, dragX, dragY) => {
+              item.x = dragX;
+              item.y = dragY;
+              handle.x = dragX;
+              handle.y = dragY;
+              this.drawMousePuzzleIcon(g, type, dragX, dragY, 1.6);
+            });
+
+            handle.on("dragend", () => {
+              this.handleMouseItemDrop(item);
+            });
+
+            this.input.setDraggable(handle);
+          });
+
+          // Close button
+          let closeBtn = this.add
+            .text(CX + 320, CY - 200, "✕", {
+              fontFamily: "EB Garamond",
+              fontSize: "26px",
+              color: "#8a9aac",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(705)
+            .setInteractive({ useHandCursor: true });
+          closeBtn.on("pointerdown", () => this.closeMousePuzzle());
+          closeBtn.on("pointerover", () => closeBtn.setColor("#ffffff"));
+          closeBtn.on("pointerout", () => closeBtn.setColor("#8a9aac"));
+          this.mpElements.push(closeBtn);
+        }
+
+        // Returns true if a point is within a box's bounds
+        _inBox(x, y, box) {
+          return (
+            Math.abs(x - box.x) < box.w / 2 + 16 &&
+            Math.abs(y - box.y) < box.h / 2 + 16
+          );
+        }
+
+        handleMouseItemDrop(item) {
+          let slots = this.mpSlots;
+          let target = null;
+
+          // mouseHead can only go in headSlot; mouseTail only in tailSlot;
+          // battery only in batterySlot; mouseBody only stays in outBody —
+          // wrong-slot drops bounce back with a spark.
+          if (
+            item.type === "mouseHead" &&
+            this._inBox(item.x, item.y, slots.headSlot)
+          )
+            target = "headSlot";
+          else if (
+            item.type === "mouseTail" &&
+            this._inBox(item.x, item.y, slots.tailSlot)
+          )
+            target = "tailSlot";
+          else if (
+            item.type === "battery" &&
+            this._inBox(item.x, item.y, slots.batterySlot)
+          )
+            target = "batterySlot";
+          else if (
+            item.type === "mouseBody" &&
+            this._inBox(item.x, item.y, slots.outBody)
+          )
+            target = "outBody";
+          else if (
+            this._inBox(item.x, item.y, slots.headSlot) ||
+            this._inBox(item.x, item.y, slots.tailSlot) ||
+            this._inBox(item.x, item.y, slots.batterySlot) ||
+            this._inBox(item.x, item.y, slots.outBody)
+          ) {
+            // dropped on a slot, but the wrong type for it
+            this.sparkAt(item.x, item.y);
+            this.showHint("bzzt...");
+          }
+
+          // vacate old slot if any
+          if (item.placedSlot) slots[item.placedSlot].filled = null;
+
+          // mouseBody has nowhere else to go — it always belongs in outBody
+          if (!target && item.type === "mouseBody") target = "outBody";
+
+          if (target) {
+            let slot = slots[target];
+            slot.filled = item;
+            item.placedSlot = target;
+            item.x = slot.x;
+            item.y = slot.y;
+            item.handle.x = slot.x;
+            item.handle.y = slot.y;
+          } else {
+            item.placedSlot = null;
+            item.x = item.homeX;
+            item.y = item.homeY;
+            item.handle.x = item.homeX;
+            item.handle.y = item.homeY;
+          }
+
+          this.drawMousePuzzleIcon(item.g, item.type, item.x, item.y, 1.6);
+          this.checkMousePuzzle();
+        }
+
+        sparkAt(x, y) {
+          let spark = this.add.graphics().setScrollFactor(0).setDepth(704);
+          spark.fillStyle(0xffaa33, 0.9);
+          for (let i = 0; i < 5; i++) {
+            spark.fillCircle(
+              x + Phaser.Math.Between(-14, 14),
+              y + Phaser.Math.Between(-14, 14),
+              Phaser.Math.Between(1, 3),
+            );
+          }
+          this.mpElements.push(spark);
+          this.tweens.add({
+            targets: spark,
+            alpha: 0,
+            duration: 350,
+            onComplete: () => spark.destroy(),
+          });
+          this.cameras.main.shake(180, 0.006);
+        }
+
+        drawMousePuzzleIcon(g, type, x, y, scale) {
+          if (type === "battery")
+            this.drawBatteryIcon(g, x, y + 12 * scale, scale);
+          else if (type === "mouseHead") this.drawMouseHeadIcon(g, x, y, scale);
+          else if (type === "mouseTail") this.drawMouseTailIcon(g, x, y, scale);
+          else if (type === "mouseBody") this.drawMouseBodyIcon(g, x, y, scale);
+          else if (type === "finalToy") {
+            this.drawMouseBodyIcon(g, x, y, scale);
+            // small spark to indicate it's now powered
+            g.fillStyle(0xffe070, 0.9);
+            g.fillCircle(x + 10 * scale, y - 24 * scale, 2.4 * scale);
+          }
+        }
+
+        // Checks for two combinable pairs:
+        //  1) headSlot + tailSlot -> outBody (mouse body)
+        //  2) outBody + batterySlot -> outFinal (solved)
+        checkMousePuzzle() {
+          let slots = this.mpSlots;
+
+          // Stage 1: head + tail -> mouse body
+          if (
+            !slots.outBody.filled &&
+            slots.headSlot.filled &&
+            slots.headSlot.filled.type === "mouseHead" &&
+            slots.tailSlot.filled &&
+            slots.tailSlot.filled.type === "mouseTail"
+          ) {
+            let headItem = slots.headSlot.filled;
+            let tailItem = slots.tailSlot.filled;
+
+            // remove the two pieces from their slots/tray entirely
+            headItem.g.destroy();
+            headItem.handle.destroy();
+            tailItem.g.destroy();
+            tailItem.handle.destroy();
+            this.mpDraggables = this.mpDraggables.filter(
+              (d) => d !== headItem && d !== tailItem,
+            );
+            slots.headSlot.filled = null;
+            slots.tailSlot.filled = null;
+
+            // create the combined mouse-body icon sitting in outBody
+            let bodyG = this.add.graphics().setScrollFactor(0).setDepth(703);
+            this.drawMousePuzzleIcon(
+              bodyG,
+              "mouseBody",
+              slots.outBody.x,
+              slots.outBody.y,
+              1.6,
+            );
+            this.mpElements.push(bodyG);
+
+            let handle = this.add
+              .rectangle(
+                slots.outBody.x,
+                slots.outBody.y,
+                90,
+                90,
+                0xffffff,
+                0.001,
+              )
+              .setScrollFactor(0)
+              .setDepth(704)
+              .setInteractive({ useHandCursor: true, draggable: true });
+            this.mpElements.push(handle);
+
+            let bodyItem = {
+              type: "mouseBody",
+              g: bodyG,
+              handle,
+              homeX: slots.outBody.x,
+              homeY: slots.outBody.y,
+              x: slots.outBody.x,
+              y: slots.outBody.y,
+              placedSlot: "outBody",
+            };
+            this.mpDraggables.push(bodyItem);
+            slots.outBody.filled = bodyItem;
+
+            handle.on("drag", (pointer, dragX, dragY) => {
+              bodyItem.x = dragX;
+              bodyItem.y = dragY;
+              handle.x = dragX;
+              handle.y = dragY;
+              this.drawMousePuzzleIcon(bodyG, "mouseBody", dragX, dragY, 1.6);
+            });
+            handle.on("dragend", () => {
+              this.handleMouseItemDrop(bodyItem);
+            });
+            this.input.setDraggable(handle);
+
+            this.cameras.main.flash(220, 200, 220, 255, false);
+            this.showHint("The pieces fit together.");
+          }
+
+          // Stage 2: mouse body + battery -> final toy (solved)
+          if (
+            slots.outBody.filled &&
+            slots.outBody.filled.type === "mouseBody" &&
+            slots.batterySlot.filled &&
+            slots.batterySlot.filled.type === "battery"
+          ) {
+            this.solveMousePuzzle();
+          }
+        }
+
+        solveMousePuzzle() {
+          this.mousePuzzleSolved = true;
+
+          // Replace mouse body in outBody + battery with the final powered toy in outFinal
+          let slots = this.mpSlots;
+          let bodyItem = slots.outBody.filled;
+          let batteryItem = slots.batterySlot.filled;
+          if (bodyItem) {
+            bodyItem.g.destroy();
+            bodyItem.handle.destroy();
+          }
+          if (batteryItem) {
+            batteryItem.g.destroy();
+            batteryItem.handle.destroy();
+          }
+          let finalG = this.add.graphics().setScrollFactor(0).setDepth(703);
+          this.drawMousePuzzleIcon(
+            finalG,
+            "finalToy",
+            slots.outFinal.x,
+            slots.outFinal.y,
+            1.6,
+          );
+          this.mpElements.push(finalG);
+
+          this.cameras.main.flash(420, 120, 255, 160, false);
+
+          this.time.delayedCall(900, () => {
+            this.closeMousePuzzle();
+            this.startMouseRunSequence();
+          });
+        }
+
+        closeMousePuzzle() {
+          this.mousePuzzleOpen = false;
+          if (this.mpOverlay) {
+            this.mpOverlay.destroy();
+            this.mpOverlay = null;
+          }
+          if (this.mpElements) {
+            this.mpElements.forEach((el) => el.destroy());
+            this.mpElements = null;
+          }
+          this.mpSlots = null;
+          this.mpDraggables = null;
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // POST-PUZZLE: toy mouse scurries to the tree, cat wakes & chases
+        // ════════════════════════════════════════════════════════════
+        startMouseRunSequence() {
+          if (this.mouseSequenceStarted) return;
+          this.mouseSequenceStarted = true;
+
+          this.showHint("whirr...");
+
+          // Spawn the toy mouse where its tail piece was found
+          let mouseStartX = this.mouseTailX;
+          let mouseY = this.gY - 2;
+          this.toyMouse = this.add.graphics().setDepth(53);
+          let targetX = this.treeX - 60;
+          // Moving rightward (toward the tree) — flip so the face points right
+          let facingRight = targetX > mouseStartX;
+          this.drawMouseBodyIcon(
+            this.toyMouse,
+            mouseStartX,
+            mouseY,
+            1.4,
+            facingRight,
+          );
+          let mouseState = { x: mouseStartX };
+
+          let runDuration = Math.abs(targetX - mouseStartX) * 3.0;
+
+          this.time.delayedCall(700, () => {
+            // toy mouse runs to the tree
+            this.tweens.add({
+              targets: mouseState,
+              x: targetX,
+              duration: runDuration,
+              ease: "Sine.InOut",
+              onUpdate: () => {
+                this.toyMouse.clear();
+                this.drawMouseBodyIcon(
+                  this.toyMouse,
+                  mouseState.x,
+                  mouseY,
+                  1.4,
+                  facingRight,
+                );
+              },
+              onComplete: () => {
+                this.toyMouse.clear();
+                this.glowIntensity = 1;
+              },
+            });
+
+            // cat wakes shortly after and chases
+            this.time.delayedCall(500, () => {
+              this.wakeCat(targetX);
+            });
+          });
+        }
+
+        wakeCat(targetX) {
+          this.catAwake = true;
+          this.cat.setTexture("runningcat", 0);
+          this.cat.setDisplaySize(80, 56);
+          this.cat.play("anim_cat_run");
+          if (this.cache.audio.exists("catFootsteps")) {
+            this.sound.play("catFootsteps", { volume: 0.4 });
+          }
+          let runDuration = Math.abs(targetX - this.cat.x) * 4.6;
+          this.tweens.add({
+            targets: this.cat,
+            x: targetX + 60,
+            duration: runDuration,
+            ease: "Sine.Out",
+            onComplete: () => {
+              this.cat.stop();
+              this.cat.setTexture("cat", 0);
+              this.cat.setDisplaySize(56, 56);
+              this.cat.play("anim_cat_sleep");
+              this.showHint("The tree stirs. Something has changed.");
+            },
+          });
+        }
+
+        setAnim(name) {
+          setPlayerAnim(this.player, this, name);
+        }
+
+        update(time, delta) {
+          tickRain(this.rain, delta);
+          tickGrain(this.grain, delta);
+
+          if (this.triggered || this.puzzleOpen || this.mousePuzzleOpen) return;
+
+          let dt = delta / 1000;
+          let px = this.player.x,
+            py = this.player.y;
+
+          this.pVY += this.gravity * dt;
+          py += this.pVY * dt;
+          if (py >= this.gY) {
+            py = this.gY;
+            this.pVY = 0;
+            this.onGround = true;
+          } else this.onGround = false;
+
+          let moving = false;
+          if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 30) {
+            px -= this.speed * dt;
+            this.player.setFlipX(true);
+            moving = true;
+          }
+          if (this.cursors.right.isDown || this.wasd.D.isDown) {
+            px += this.speed * dt;
+            this.player.setFlipX(false);
+            moving = true;
+          }
+          if (
+            (this.cursors.up.isDown ||
+              this.cursors.space.isDown ||
+              this.wasd.W.isDown) &&
+            this.onGround
+          ) {
+            this.pVY = -360;
+            this.setAnim("jump");
+          }
+
+          if (!this.onGround) {
+            this.setAnim(this.pVY < 0 ? "jump" : "fall");
+          } else if (moving) {
+            this.setAnim("run");
+          } else {
+            this.setAnim("stand");
+          }
+
+          // ── Hint triggers based on distance traveled ──
+          this.hints.forEach((h, i) => {
+            if (!this.hintsShown.has(i) && px >= h.x) {
+              this.hintsShown.add(i);
+              this.showHint(h.text);
+            }
+          });
+
+          // ── Item pickups: Battery, Head of Mouse, Tail of Mouse ──
+          this.checkItemPickup(
+            px,
+            py,
+            "battery",
+            this.batteryX,
+            "Battery",
+            "A small battery, still intact.",
+          );
+          this.checkItemPickup(
+            px,
+            py,
+            "mouseHead",
+            this.mouseHeadX,
+            "Head of an Electrical Mouse",
+            "Head of an electrical mouse...",
+          );
+          this.checkItemPickup(
+            px,
+            py,
+            "mouseTail",
+            this.mouseTailX,
+            "Tail of an Electrical Mouse",
+            "Tail of an electrical mouse...",
+          );
+
+          // Keep ambient item labels positioned above their items as camera scrolls
+          if (this.itemLabels) {
+            if (this.itemLabels.battery)
+              this.itemLabels.battery.x =
+                this.batteryX - this.cameras.main.scrollX;
+            if (this.itemLabels.mouseHead)
+              this.itemLabels.mouseHead.x =
+                this.mouseHeadX - this.cameras.main.scrollX;
+            if (this.itemLabels.mouseTail)
+              this.itemLabels.mouseTail.x =
+                this.mouseTailX - this.cameras.main.scrollX;
+          }
+
+          // ── Tree glow ramps as player approaches (full once puzzle solved) ──
+          if (this.puzzleSolved) {
+            this.glowIntensity = 1;
+          } else {
+            let distToTree = this.treeX - px;
+            if (distToTree < 900) {
+              this.glowIntensity = Phaser.Math.Clamp(
+                1 - distToTree / 900,
+                0,
+                1,
+              );
+            }
+          }
+
+          // ── Near the hole: locked until puzzle solved ──
+          if (Math.abs(px - this.holeX) < 36 && py >= this.gY) {
+            if (this.puzzleSolved) {
+              this.triggered = true;
+              this.cameras.main.shake(380, 0.009);
+              if (this.windSnd)
+                this.tweens.add({
+                  targets: this.windSnd,
+                  volume: 0.3,
+                  duration: 800,
+                });
+              this.time.delayedCall(550, () => {
+                this.cameras.main.fade(900, 0, 0, 0);
+                if (this.rainSnd)
+                  this.tweens.add({
+                    targets: this.rainSnd,
+                    volume: 0.05,
+                    duration: 900,
+                  });
+                if (this.windSnd)
+                  this.tweens.add({
+                    targets: this.windSnd,
+                    volume: 0.05,
+                    duration: 900,
+                  });
+                if (this.music)
+                  this.tweens.add({
+                    targets: this.music,
+                    volume: 0.12,
+                    duration: 900,
+                  });
+                this.time.delayedCall(900, () => {
+                  if (this.rainSnd) this.rainSnd.stop();
+                  if (this.windSnd) this.windSnd.stop();
+                  this.scene.start("TunnelScene", { music: this.music });
+                });
+              });
+            } else if (!this.lockedHintShown) {
+              this.lockedHintShown = true;
+              this.showHint(
+                "The hole is sealed by something... powerless. There must be another way to wake this place.",
+              );
+            }
+          }
+
+          // ── Single-pass interaction prompt (cat / tree) — only one shown at a time ──
+          let nearCat =
+            !this.catAwake && Math.abs(px - this.catX) < 80 && py >= this.gY;
+          let nearTreePuzzle =
+            Math.abs(px - (this.treeX - 90)) < 90 && py >= this.gY;
+
+          if (nearCat && this.collectedCount >= 3 && !this.mousePuzzleSolved) {
+            this.showPuzzlePrompt("[E]  Use Collected Parts");
+            if (this.puzzlePrompt) {
+              this.puzzlePrompt.x = px - this.cameras.main.scrollX;
+              this.puzzlePrompt.y = py - PLAYER_H - 22;
+            }
+            if (
+              Phaser.Input.Keyboard.JustDown(this.eKey) &&
+              !this.mousePuzzleOpen
+            ) {
+              this.openMousePuzzle();
+            }
+          } else if (nearCat && this.collectedCount < 3) {
+            this.showPuzzlePrompt("[E]  Wake Cat");
+            if (this.puzzlePrompt) {
+              this.puzzlePrompt.x = px - this.cameras.main.scrollX;
+              this.puzzlePrompt.y = py - PLAYER_H - 22;
+            }
+            if (
+              Phaser.Input.Keyboard.JustDown(this.eKey) &&
+              !this.wakeCatTried
+            ) {
+              this.wakeCatTried = true;
+              this.showHint("The cat doesn't stir.");
+            }
+          } else if (
+            !this.puzzleSolved &&
+            nearTreePuzzle &&
+            !this.puzzleOpen &&
+            this.mousePuzzleSolved
+          ) {
+            this.showPuzzlePrompt("[E]  Restore the circuit");
+            if (this.puzzlePrompt) {
+              this.puzzlePrompt.x = px - this.cameras.main.scrollX;
+              this.puzzlePrompt.y = py - PLAYER_H - 22;
+            }
+            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              this.openPuzzle();
+            }
+          } else {
+            this.hidePuzzlePrompt();
+          }
+
+          this.player.x = px;
+          this.player.y = py;
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // TUNNEL SCENE — player drops through a narrow industrial shaft
+      // before breaking out into the open fall over the city
+      // ════════════════════════════════════════════════════════════════
+      class TunnelScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "TunnelScene" });
+        }
+
+        init(data) {
+          this.passedMusic = data && data.music;
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#05060a");
+          this.music = this.passedMusic;
+
+          // ── Tunnel walls — vertical industrial pipe/panel tiles, tiled and
+          // scrolling upward past the player to sell the sense of falling ──
+          const WALL_W = 110;
+          const TILE_H = 140;
+          this.wallTiles = [];
+
+          let leftKeys = [
+            "pipe_vertical1",
+            "pipe_vertical3",
+            "panel_console_detail",
+          ];
+          let rightKeys = [
+            "pipe_vertical2",
+            "pipe_vertical4",
+            "panel_console_detail",
+          ];
+
+          let tilesNeeded = Math.ceil(H / TILE_H) + 2;
+          for (let i = -1; i < tilesNeeded; i++) {
+            let lKey = leftKeys[Math.abs(i) % leftKeys.length];
+            let rKey = rightKeys[Math.abs(i) % rightKeys.length];
+            let l = this.add
+              .image(0, i * TILE_H, lKey)
+              .setOrigin(0, 0)
+              .setDisplaySize(WALL_W, TILE_H)
+              .setDepth(5);
+            let r = this.add
+              .image(W, i * TILE_H, rKey)
+              .setOrigin(1, 0)
+              .setDisplaySize(WALL_W, TILE_H)
+              .setFlipX(true)
+              .setDepth(5);
+            this.wallTiles.push(l, r);
+          }
+
+          // Dark gradient shading at the tunnel edges for depth
+          let shade = this.add.graphics().setDepth(6);
+          shade.fillGradientStyle(
+            0x000000,
+            0x000000,
+            0x000000,
+            0x000000,
+            0.7,
+            0.7,
+            0,
+            0,
+          );
+          shade.fillRect(0, 0, WALL_W + 40, H);
+          shade.fillGradientStyle(
+            0x000000,
+            0x000000,
+            0x000000,
+            0x000000,
+            0,
+            0,
+            0.7,
+            0.7,
+          );
+          shade.fillRect(W - WALL_W - 40, 0, WALL_W + 40, H);
+
+          // ── Falling player, drifting slightly side to side ──
+          this.fp = this.add
+            .sprite(W / 2, H * 0.32, "fall")
+            .setOrigin(0.5, 0.5)
+            .setScale((PLAYER_H / PLAYER_ANIMS.fall.charH) * 1.3)
+            .setDepth(20);
+          this.fp.play("anim_fall");
+
+          this.tweens.add({
+            targets: this.fp,
+            x: { from: W / 2 - 30, to: W / 2 + 30 },
+            duration: 900,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.InOut",
+          });
+
+          // Wind streaks
+          this.windG = this.add.graphics().setDepth(15);
+          this.winds = [];
+          for (let i = 0; i < 22; i++) {
+            this.winds.push({
+              x: Phaser.Math.Between(WALL_W, W - WALL_W),
+              y: Phaser.Math.Between(0, H),
+              spd: Phaser.Math.FloatBetween(500, 850),
+              len: Phaser.Math.Between(30, 70),
+              a: Phaser.Math.FloatBetween(0.06, 0.2),
+            });
+          }
+
+          this.scrollSpeed = 620;
+          this.tileH = TILE_H;
+          mkBars(this, 600);
+          this.grain = mkGrain(this, 550);
+
+          this.cameras.main.fadeIn(300);
+
+          this.time.delayedCall(2200, () => {
+            this.cameras.main.fade(450, 0, 0, 0);
+            this.time.delayedCall(450, () => {
+              this.scene.start("FallScene", { music: this.music });
+            });
+          });
+        }
+
+        update(time, delta) {
+          let dy = (this.scrollSpeed * delta) / 1000;
+          let wrapRange = this.tileH * Math.ceil(H / this.tileH + 2);
+          this.wallTiles.forEach((t) => {
+            t.y -= dy;
+            if (t.y < -this.tileH) t.y += wrapRange;
+          });
+
+          this.windG.clear();
+          this.winds.forEach((w) => {
+            w.y -= (w.spd * delta) / 1000;
+            if (w.y < -20) w.y = H + 20;
+            this.windG.lineStyle(1, 0x303a4a, w.a);
+            this.windG.beginPath();
+            this.windG.moveTo(w.x, w.y);
+            this.windG.lineTo(w.x, w.y - w.len);
+            this.windG.strokePath();
+          });
+
+          tickGrain(this.grain, delta);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // FALL SCENE — cinematic drop into the city
+      // ════════════════════════════════════════════════════════════════
+      class FallScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "FallScene" });
+        }
+
+        init(data) {
+          this.passedMusic = data && data.music;
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#000000");
+          this.music = this.passedMusic;
+
+          // Rushing city silhouettes
+          for (let i = 0; i < 12; i++) {
+            let g = this.add.graphics();
+            g.fillStyle(0x050810, Phaser.Math.FloatBetween(0.12, 0.4));
+            g.fillRect(
+              Phaser.Math.Between(0, W),
+              Phaser.Math.Between(-300, H),
+              Phaser.Math.Between(25, 110),
+              Phaser.Math.Between(80, 300),
+            );
+            this.tweens.add({
+              targets: g,
+              y: `+=${H * 1.6}`,
+              duration: Phaser.Math.Between(650, 1350),
+              repeat: -1,
+              delay: Phaser.Math.Between(0, 700),
+            });
+          }
+
+          // Falling player
+          this.fp = this.add
+            .sprite(W / 2, -110, "fall")
+            .setOrigin(0.5, 0.5)
+            .setScale((PLAYER_H / PLAYER_ANIMS.fall.charH) * 1.4)
+            .setDepth(20);
+          this.fp.play("anim_fall");
+
+          this.tweens.add({
+            targets: this.fp,
+            y: H + 120,
+            duration: 2500,
+            ease: "Cubic.In",
+          });
+          this.tweens.add({
+            targets: this.fp,
+            angle: { from: -10, to: 16 },
+            duration: 2500,
+          });
+
+          // Wind streaks
+          this.windG = this.add.graphics().setDepth(10);
+          this.winds = [];
+          for (let i = 0; i < 32; i++) {
+            this.winds.push({
+              x: Phaser.Math.Between(0, W),
+              y: Phaser.Math.Between(0, H),
+              spd: Phaser.Math.FloatBetween(650, 1100),
+              len: Phaser.Math.Between(40, 95),
+              a: Phaser.Math.FloatBetween(0.08, 0.28),
+            });
+          }
+
+          mkBars(this, 600);
+          this.grain = mkGrain(this, 550);
+
+          this.time.delayedCall(2600, () => {
+            this.cameras.main.flash(750, 255, 255, 255, false);
+            this.time.delayedCall(750, () =>
+              this.scene.start("CityScene", { music: this.music }),
+            );
+          });
+        }
+
+        update(time, delta) {
+          this.windG.clear();
+          this.winds.forEach((w) => {
+            w.y += (w.spd * delta) / 1000;
+            if (w.y > H + 20) w.y = -20;
+            this.windG.lineStyle(1, 0x182838, w.a);
+            this.windG.beginPath();
+            this.windG.moveTo(w.x, w.y);
+            this.windG.lineTo(w.x + Phaser.Math.Between(-7, 7), w.y + w.len);
+            this.windG.strokePath();
+          });
+          tickGrain(this.grain, delta);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // CITY SCENE — main gameplay
+      // ════════════════════════════════════════════════════════════════
+      class CityScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "CityScene" });
+        }
+
+        init(data) {
+          this.passedMusic = data && data.music;
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#131820");
+          this.worldW = 6200;
+          this.gY = 608;
+          this.pVY = 0;
+          this.gravity = 900;
+          this.onGround = true;
+          this.isLanding = false;
+          this.speed = 218;
+          this.isDead = false;
+          this.respawnX = 160;
+          this.respawnY = this.gY;
+          this.curAnim = null;
+
+          this.hasRod = false;
+          this.p1Solved = false;
+          this.p2Solved = false;
+          this.rubberCount = 0;
+          this.rubberPlaced = 0;
+          this.safeZones = [];
+          this.pitZones = [];
+          this.lamps = [];
+          this.eyePairs = [];
+          this.interactPrompt = null;
+          this.inventoryText = null;
+          this.nearFuseBox = false;
+          this.nearRod = false;
+          this.nearRubber = [];
+          this.liveX1 = 4300;
+          this.liveX2 = 4810;
+          this.arcTimer = 0;
+
+          this.buildBG();
+          this.buildGround();
+          this.buildEnvironment();
+          this.buildAtmosphere();
+
+          this.rain = mkRain(this, 245, 130, H - 62);
+          mkVignette(this, 175);
+          mkBars(this, 600);
+          this.grain = mkGrain(this, 560);
+
+          this.createPlayer();
+
+          this.cameras.main.setBounds(0, 0, this.worldW, H);
+          this.cameras.main.startFollow(this.player, true, 0.06, 0.06);
+          this.cursors = this.input.keyboard.createCursorKeys();
+          this.wasd = this.input.keyboard.addKeys("W,A,S,D");
+          this.eKey = this.input.keyboard.addKey("E");
+
+          // Ambient music carries over from the outer world, fading back up
+          // to a quieter "underground" presence
+          this.music = this.passedMusic;
+          if (this.music && this.music.isPlaying) {
+            this.tweens.add({
+              targets: this.music,
+              volume: 0.12,
+              duration: 2500,
+            });
+          } else if (this.cache.audio.exists("ambientOpening")) {
+            // fallback: if no music was carried (e.g. scene started directly), start fresh
+            this.music = this.sound.add("ambientOpening", {
+              loop: true,
+              volume: 0,
+            });
+            this.music.play();
+            this.tweens.add({
+              targets: this.music,
+              volume: 0.12,
+              duration: 2500,
+            });
+          }
+
+          this.cameras.main.fadeIn(2200);
+          this.time.delayedCall(1900, () => this.showText("...", 2000));
+          this.time.delayedCall(5000, () => this.showText("Where am I?", 2500));
+          this.time.delayedCall(8800, () =>
+            this.showText("I need to find a way home.", 2800),
+          );
+        }
+
+        // ── Background ─────────────────────────────────────────────
+        buildBG() {
+          let solidSky = this.add.graphics();
+          solidSky.fillStyle(0x0a0d16, 1);
+          solidSky.fillRect(0, 0, this.worldW, H);
+          solidSky.setScrollFactor(0.05);
+          this.add
+            .image(0, 0, "sky")
+            .setOrigin(0, 0)
+            .setDisplaySize(this.worldW, H)
+            .setScrollFactor(0.05)
+            .setAlpha(0.55)
+            .setTint(0x222a40);
+
+          for (let i = 0; i < 5; i++)
+            this.add
+              .image(i * 1850, H - 115, "distantCity")
+              .setOrigin(0, 1)
+              .setDisplaySize(1910, 275)
+              .setScrollFactor(0.12)
+              .setAlpha(0.45)
+              .setTint(0x10131e);
+
+          for (let i = 0; i < 7; i++)
+            this.add
+              .image(i * 1350, H - 75, "farBuildings")
+              .setOrigin(0, 1)
+              .setDisplaySize(1410, 400)
+              .setScrollFactor(0.26)
+              .setAlpha(0.5)
+              .setTint(0x141926);
+
+          for (let i = 0; i < 8; i++)
+            this.add
+              .image(i * 1150, H - 48, "midBuildings")
+              .setOrigin(0, 1)
+              .setDisplaySize(1210, 360)
+              .setScrollFactor(0.46)
+              .setAlpha(0.6)
+              .setTint(0x181d2c);
+
+          // Heavy dark overlay across the upper/mid background to smother the
+          // hard rectangular seams between tiled background images
+          let dark = this.add.graphics().setScrollFactor(0).setDepth(0.5);
+          dark.fillGradientStyle(
+            0x05060a,
+            0x05060a,
+            0x05060a,
+            0x05060a,
+            0.55,
+            0.55,
+            0.15,
+            0.15,
+          );
+          dark.fillRect(0, 0, W, H * 0.78);
+        }
+
+        // ── Ground ─────────────────────────────────────────────────
+        buildGround() {
+          // Dark fill beneath the ground tiles (visible through any gaps)
+          let g = this.add.graphics();
+          g.fillStyle(0x0c0e16, 1);
+          g.fillRect(0, this.gY + 28, this.worldW, H - this.gY - 28);
+
+          // ═══ Pillar-hop section (Puzzle 1) ═══════════════════════════
+          // A sequence of raised pillar platforms separated by pit gaps.
+          // Player must jump pillar-to-pillar; pits are clear gaps to a void.
+          const PILLAR_TOP = this.gY - 34; // pillars sit above the main ground line
+          const PILLAR_W = 130;
+          const PIT_W = 80;
+          const SECTION_START = 1300;
+
+          this.pillars = [];
+          this.pitZones = [];
+          let px = SECTION_START;
+          for (let n = 0; n < 6; n++) {
+            this.pillars.push({ x1: px, x2: px + PILLAR_W, top: PILLAR_TOP });
+            px += PILLAR_W;
+            if (n < 5) {
+              this.pitZones.push({ x1: px, x2: px + PIT_W });
+              px += PIT_W;
+            }
+          }
+          const SECTION_END = px; // = 2480
+
+          let flatKeys = [
+            "ground_flat1",
+            "ground_flat2",
+            "ground_flat3",
+            "ground_flat4",
+            "ground_flat5",
+            "ground_flat6",
+            "ground_flat7",
+            "ground_flat8",
+            "ground_flat9",
+            "ground_flat10",
+          ];
+          const TILE = 140;
+          let i = 0;
+          for (let x = 0; x < this.worldW; x += TILE) {
+            if (x + TILE > SECTION_START && x < SECTION_END) {
+              i++;
+              continue;
+            }
+            let key = flatKeys[i % flatKeys.length];
+            this.add
+              .image(x, this.gY, key)
+              .setOrigin(0, 0)
+              .setDisplaySize(TILE, TILE)
+              .setDepth(1);
+            i++;
+          }
+
+          // Rim caps where the normal ground breaks off into the pillar section
+          this.add
+            .image(SECTION_START, this.gY, "ground_pit_v_left")
+            .setOrigin(1, 0)
+            .setDisplaySize(140, 140)
+            .setDepth(2);
+          this.add
+            .image(SECTION_END, this.gY, "ground_pit_v_right")
+            .setOrigin(0, 0)
+            .setDisplaySize(140, 140)
+            .setDepth(2);
+
+          // Void beneath the whole pillar-hop stretch
+          let pitVoid = this.add.graphics().setDepth(1);
+          pitVoid.fillStyle(0x05060a, 1);
+          pitVoid.fillRect(
+            SECTION_START,
+            this.gY + 30,
+            SECTION_END - SECTION_START,
+            H - this.gY - 2,
+          );
+
+          // Raised pillar tops — distinct color/sprite from normal ground so
+          // they read as "safe to land on" vs the dark pit gaps between them
+          this.pillars.forEach((p, idx) => {
+            // Pillar body (block sprite, stacked) down to the void floor
+            this.add
+              .image(p.x1, p.top, "block_plain1")
+              .setOrigin(0, 0)
+              .setDisplaySize(PILLAR_W, this.gY - p.top + 30)
+              .setDepth(2);
+            // Bright top cap so the safe surface is unmistakable
+            this.add
+              .image(p.x1, p.top, "ground_flat" + ((idx % 10) + 1))
+              .setOrigin(0, 0)
+              .setDisplaySize(PILLAR_W, 36)
+              .setDepth(3);
+            // Hazard-yellow edge stripes on the first/last pillar of the run
+            if (idx === 0 || idx === this.pillars.length - 1) {
+              this.add
+                .image(p.x1, p.top - 26, "hazard_yellow4")
+                .setOrigin(0, 1)
+                .setDisplaySize(PILLAR_W, 18)
+                .setAlpha(0.85)
+                .setDepth(4);
+            }
+          });
+        }
+
+        // ── Environment props ──────────────────────────────────────
+        buildEnvironment() {
+          this.drawTram(475, this.gY - 60);
+
+          // Generator -> large console panel
+          this.add
+            .image(358, this.gY, "panel_console2")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(130, 130)
+            .setAlpha(0.9)
+            .setDepth(4);
+
+          // Lamps: 0,1 intro | 2 fuse box | 3,4 breather zone | 5,6 puzzle 2
+          [225, 628, 880, 2550, 3200, 4700, 5100].forEach((x, i) =>
+            this.mkLamp(x, i),
+          );
+          this.drawPowerLines();
+
+          // Decorative pipes + bolted beams scattered along the route
+          [120, 800, 2620, 3200, 3750, 4150, 5300, 5800].forEach((x, i) => {
+            let pipeKeys = [
+              "pipe_vertical1",
+              "pipe_vertical2",
+              "pipe_vertical3",
+              "pipe_vertical4",
+            ];
+            this.add
+              .image(x, this.gY, pipeKeys[i % pipeKeys.length])
+              .setOrigin(0.5, 1)
+              .setDisplaySize(36, 140)
+              .setAlpha(0.85)
+              .setDepth(3);
+          });
+          [500, 2700, 3400, 5500].forEach((x) => {
+            this.add
+              .image(x, this.gY - 150, "beam_bolted1")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(180, 26)
+              .setAlpha(0.8)
+              .setDepth(3);
+          });
+
+          // Background ladders / fences for industrial texture
+          [700, 2780, 3650, 5600].forEach((x) => {
+            this.add
+              .image(x, this.gY, "ladder1")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(56, 168)
+              .setAlpha(0.7)
+              .setDepth(2);
+          });
+          for (let x = 0; x < this.worldW; x += 420) {
+            this.add
+              .image(x, this.gY - 140, "fence1")
+              .setOrigin(0, 1)
+              .setDisplaySize(280, 60)
+              .setAlpha(0.35)
+              .setDepth(2);
+          }
+
+          // ═══ PUZZLE 1 — Fuse box + Pillar-hop pit gauntlet ═══════
+          // Fuse box -> industrial console panel (encountered first)
+          this.fuseBoxX = 850;
+          this.fuseBoxY = this.gY - 108;
+          this.fuseBoxImg = this.add
+            .image(this.fuseBoxX, this.fuseBoxY, "panel_console1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(90, 110)
+            .setDepth(5);
+          this.add
+            .image(this.fuseBoxX, this.fuseBoxY - 110, "sign_warning_triangle")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(40, 40)
+            .setDepth(5);
+          this.fuseBoxSparkG = this.add.graphics().setDepth(6);
+          this.time.addEvent({
+            delay: 360,
+            repeat: -1,
+            callback: () => {
+              if (this.p1Solved) return;
+              this.fuseBoxSparkG.clear();
+              if (Math.random() > 0.32) {
+                this.fuseBoxSparkG.fillStyle(
+                  0xff8800,
+                  Phaser.Math.FloatBetween(0.6, 1),
+                );
+                this.fuseBoxSparkG.fillCircle(
+                  this.fuseBoxX + Phaser.Math.Between(-12, 12),
+                  this.fuseBoxY - Phaser.Math.Between(5, 30),
+                  Phaser.Math.Between(3, 7),
+                );
+                this.fuseBoxSparkG.fillStyle(0xffaa44, 0.22);
+                this.fuseBoxSparkG.fillCircle(
+                  this.fuseBoxX,
+                  this.fuseBoxY - 18,
+                  24,
+                );
+              }
+            },
+          });
+          this.fuseAttempts = 0;
+
+          // Metal rod — found further along, past the fuse box
+          this.rodX = 1080;
+          this.rodY = this.gY - 13;
+          this.rodCollected = false;
+          this.rodG = this.add.graphics().setDepth(5);
+          this.rodG.fillStyle(0x5878a0, 1);
+          this.rodG.fillRect(this.rodX, this.rodY, 80, 11);
+          this.rodG.fillStyle(0x88b0d0, 0.7);
+          this.rodG.fillRect(this.rodX + 6, this.rodY + 1, 68, 4);
+          this.tweens.add({
+            targets: this.rodG,
+            alpha: { from: 0.55, to: 1 },
+            duration: 920,
+            yoyo: true,
+            repeat: -1,
+          });
+
+          this.add
+            .image(955, this.gY, "crate_brown1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 70)
+            .setDepth(4);
+
+          // Hazard tape framing the pillar-hop gauntlet
+          let gaugeX1 = this.pillars[0].x1 - 30;
+          let gaugeX2 = this.pillars[this.pillars.length - 1].x2 + 30;
+          this.add
+            .image(gaugeX1, this.gY - 30, "hazard_yellow1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 70)
+            .setDepth(6);
+          this.add
+            .image(gaugeX2, this.gY - 30, "hazard_yellow1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 70)
+            .setFlipX(true)
+            .setDepth(6);
+
+          // Spikes inside each pit gap, revealed once the circuit is restored
+          this.spikeImgs = [];
+          this.pitZones.forEach((pit) => {
+            let spike = this.add
+              .image((pit.x1 + pit.x2) / 2, this.gY + 10, "spikes_up")
+              .setOrigin(0.5, 0)
+              .setDisplaySize(pit.x2 - pit.x1 + 8, 40)
+              .setDepth(2)
+              .setVisible(false);
+            this.spikeImgs.push(spike);
+          });
+
+          // Snakes / scorpions lurking in the pits — drawn via graphics,
+          // adding clear "this is dangerous" signal alongside the spikes
+          this.creatureG = this.add.graphics().setDepth(3);
+          this.creatures = this.pitZones.map((pit, idx) => ({
+            cx: (pit.x1 + pit.x2) / 2,
+            cy: this.gY + 22,
+            type: idx % 2 === 0 ? "scorpion" : "snake",
+            phase: Phaser.Math.FloatBetween(0, Math.PI * 2),
+          }));
+          this.drawPits(false);
+
+          // Darkness over the pillar-hop zone before the circuit is restored —
+          // lifts when the puzzle is solved (fuse box powers the lamps).
+          this.pitDarkness = this.add.graphics().setDepth(60);
+
+          const BLUR = 200;
+
+          // Blur transition on the LEFT side
+          for (let i = 0; i < BLUR; i++) {
+            this.pitDarkness.fillStyle(0x000000, i / BLUR);
+
+            this.pitDarkness.fillRect(gaugeX1 - BLUR + i, 0, 1, H);
+          }
+
+          // Completely pitch-black puzzle area
+          this.pitDarkness.fillStyle(0x000000, 1);
+
+          this.pitDarkness.fillRect(gaugeX1, 0, gaugeX2 - gaugeX1, H);
+
+          // this.door1 = this.add
+          //   .image(gaugeX2 + 30, this.gY, "door")
+          //   .setOrigin(0.5, 1)
+          //   .setDisplaySize(114, 154)
+          //   .setDepth(5);
+
+          // ═══ BREATHER ZONE — quiet stretch between puzzles ═══════
+          // A moment to decompress: pipes/ladders above already placed,
+          // add a couple of resting props and signage for atmosphere.
+          this.add
+            .image(2900, this.gY, "crate_olive1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 60)
+            .setDepth(4)
+            .setAlpha(0.85);
+          this.add
+            .image(3120, this.gY, "block_plain2")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 70)
+            .setDepth(4)
+            .setAlpha(0.7);
+          this.add
+            .image(3500, this.gY - 30, "sign_diamond")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(46, 46)
+            .setDepth(5);
+          this.add
+            .image(3780, this.gY, "crate_blue1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 60)
+            .setDepth(4)
+            .setAlpha(0.85);
+          this.add
+            .image(3950, this.gY - 60, "gear_small")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(50, 50)
+            .setAlpha(0.6)
+            .setDepth(3);
+
+          // ═══ PUZZLE 2 — Live Floor ════════════════════════════
+          this.add
+            .image(4555, this.gY, "panel_large1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(180, 170)
+            .setDepth(4);
+          this.add
+            .image(4555, this.gY - 175, "sign_power")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(44, 44)
+            .setDepth(5);
+
+          // Hazard tape framing the live-floor zone
+          this.add
+            .image(this.liveX1, this.gY - 30, "hazard_orange1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 70)
+            .setDepth(21);
+          this.add
+            .image(this.liveX2, this.gY - 30, "hazard_orange1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 70)
+            .setFlipX(true)
+            .setDepth(21);
+          for (let x = this.liveX1; x < this.liveX2; x += 56)
+            this.add
+              .image(x, this.gY - 56, "hazard_orange4")
+              .setOrigin(0, 1)
+              .setDisplaySize(58, 18)
+              .setAlpha(0.85)
+              .setDepth(21);
+
+          this.liveG = this.add.graphics().setDepth(20);
+          this.drawLiveFloor();
+
+          this.liveSparkG = this.add.graphics().setDepth(22);
+          this.time.addEvent({
+            delay: 195,
+            repeat: -1,
+            callback: () => {
+              if (this.p2Solved) return;
+              this.liveSparkG.clear();
+              if (Math.random() > 0.22) {
+                let sx = Phaser.Math.Between(
+                  this.liveX1 + 60,
+                  this.liveX2 - 60,
+                );
+                this.liveSparkG.fillStyle(
+                  0x3377ff,
+                  Phaser.Math.FloatBetween(0.5, 1),
+                );
+                this.liveSparkG.fillCircle(
+                  sx,
+                  this.gY - 2,
+                  Phaser.Math.Between(3, 9),
+                );
+                this.liveSparkG.fillStyle(0x88bbff, 0.16);
+                this.liveSparkG.fillCircle(sx, this.gY - 2, 20);
+              }
+            },
+          });
+
+          this.rubberBlocks = [];
+          [{ x: 4380 }, { x: 4320 }, { x: 4430 }, { x: 4370 }].forEach(
+            (b, i) => {
+              let tealKeys = [
+                "crate_blue1",
+                "crate_blue2",
+                "crate_green1",
+                "crate_green2",
+              ];
+              let img = this.add
+                .image(b.x, this.gY, tealKeys[i % tealKeys.length])
+                .setOrigin(0.5, 1)
+                .setDisplaySize(60, 60)
+                .setDepth(5);
+              this.rubberBlocks.push({ x: b.x, img, collected: false });
+            },
+          );
+
+          this.add
+            .image(4250, this.gY, "crate_olive1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(64, 64)
+            .setDepth(5);
+
+          this.add
+            .image(4950, this.gY - 50, "panel_orange1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(110, 130)
+            .setDepth(5);
+          this.leverImg = this.add
+            .image(4970, this.gY - 8, "switch_green_off")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 76)
+            .setDepth(5);
+
+          // Gear decoration near the lever — mechanical theme
+          this.add
+            .image(4870, this.gY - 4, "gear_medium")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(70, 70)
+            .setAlpha(0.7)
+            .setDepth(4);
+
+          //   this.door2 = this.add
+          //     .image(5050, this.gY, "door")
+          //     .setOrigin(0.5, 1)
+          //     .setDisplaySize(114, 154)
+          //     .setDepth(5);
+        }
+
+        buildAtmosphere() {
+          let atm = this.add.graphics().setScrollFactor(0).setDepth(155);
+          atm.fillStyle(0x080f1c, 0.19);
+          atm.fillRect(0, 0, W, H);
+
+          for (let i = 0; i < 14; i++) {
+            let fx = Phaser.Math.Between(0, this.worldW);
+            let fy = Phaser.Math.Between(this.gY - 210, this.gY - 40);
+            let fw = Phaser.Math.Between(260, 540);
+            let wisp = this.add.graphics().setScrollFactor(0.5).setDepth(50);
+            wisp.fillStyle(0x2a3850, Phaser.Math.FloatBetween(0.05, 0.12));
+            wisp.fillEllipse(0, 0, fw, fw * 0.28);
+            wisp.x = fx;
+            wisp.y = fy;
+            this.tweens.add({
+              targets: wisp,
+              x: fx + Phaser.Math.Between(180, 360),
+              duration: Phaser.Math.Between(9000, 16000),
+              yoyo: true,
+              repeat: -1,
+              ease: "Sine.InOut",
+            });
+          }
+
+          this.flickerWindows = [];
+          for (let i = 0; i < 26; i++) {
+            let wx = Phaser.Math.Between(100, this.worldW - 100);
+            let wy = Phaser.Math.Between(this.gY - 320, this.gY - 130);
+            let wg = this.add.graphics().setScrollFactor(0.46).setDepth(8);
+            wg.fillStyle(0x3a5878, 1);
+            wg.fillRect(
+              0,
+              0,
+              Phaser.Math.Between(5, 9),
+              Phaser.Math.Between(7, 12),
+            );
+            wg.x = wx;
+            wg.y = wy;
+            wg.setAlpha(Phaser.Math.FloatBetween(0.05, 0.22));
+            this.flickerWindows.push(wg);
+          }
+          this.time.addEvent({
+            delay: 220,
+            repeat: -1,
+            callback: () => {
+              this.flickerWindows.forEach((w) => {
+                if (Math.random() > 0.85)
+                  w.setAlpha(Phaser.Math.FloatBetween(0.03, 0.28));
+              });
+            },
+          });
+        }
+
+        drawPowerLines() {
+          let g = this.add.graphics().setDepth(14);
+          g.lineStyle(1.5, 0x0a0c12, 0.85);
+          for (let i = 0; i < this.lamps.length - 1; i++) {
+            let x1 = this.lamps[i].x - 30,
+              x2 = this.lamps[i + 1].x - 30;
+            let topY = this.gY - 168;
+            let sag = (x2 - x1) * 0.1;
+            g.beginPath();
+            g.moveTo(x1, topY);
+            let steps = 14;
+            for (let s = 1; s <= steps; s++) {
+              let t = s / steps;
+              let x = x1 + (x2 - x1) * t;
+              let y = topY + Math.sin(t * Math.PI) * sag;
+              g.lineTo(x, y);
+            }
+            g.strokePath();
+          }
+        }
+
+        mkLamp(x, index) {
+          // Pole (drawn) + bulb fixture sprite on top
+          let g = this.add.graphics().setDepth(9);
+          g.fillStyle(0x24263a, 1);
+          g.fillRect(x - 3, this.gY - 170, 6, 170);
+          g.fillRect(x - 34, this.gY - 170, 34, 5);
+
+          let bulbKeys = [
+            "lamp_bulb_yellow",
+            "lamp_bulb_blue",
+            "lamp_bulb_green",
+            "lamp_bulb_orange",
+          ];
+          let bulbKey = bulbKeys[index % bulbKeys.length];
+          let bulb = this.add
+            .image(x - 21, this.gY - 178, bulbKey)
+            .setOrigin(0.5, 1)
+            .setDisplaySize(46, 38)
+            .setDepth(10)
+            .setTint(0x444a5c);
+          this.lamps.push({ x, on: false, index, bulb, bulbKey });
+        }
+
+        turnLampOn(index) {
+          if (index >= this.lamps.length || this.lamps[index].on) return;
+          this.lamps[index].on = true;
+          let x = this.lamps[index].x,
+            y = this.gY;
+          // Restore the bulb's natural color (remove the "off" tint)
+          this.lamps[index].bulb.clearTint();
+
+          let gl = this.add.graphics().setDepth(15);
+          gl.fillStyle(0xd4780a, 0.052);
+          gl.fillCircle(x - 22, y - 172, 215);
+          gl.fillStyle(0xe08820, 0.098);
+          gl.fillCircle(x - 22, y - 172, 130);
+          gl.fillStyle(0xf09030, 0.185);
+          gl.fillCircle(x - 22, y - 172, 70);
+          let cone = this.add.graphics().setDepth(13);
+          cone.fillStyle(0xd4780a, 0.042);
+          cone.fillTriangle(
+            x - 42,
+            y - 164,
+            x - 22,
+            y - 164,
+            x + 85,
+            y,
+            x - 140,
+            y,
+          );
+          let ref = this.add.graphics().setDepth(12);
+          ref.fillStyle(0xd4780a, 0.1);
+          ref.fillEllipse(x - 22, y + 8, 175, 28);
+          gl.alpha = 0;
+          cone.alpha = 0;
+          ref.alpha = 0;
+          this.tweens.add({
+            targets: [gl, cone, ref],
+            alpha: 1,
+            duration: 540,
+            ease: "Power2",
+          });
+          this.cameras.main.flash(220, 255, 200, 100, false);
+        }
+
+        drawTram(x, y) {
+          let g = this.add.graphics();
+          g.fillStyle(0x1a1c2a, 1);
+          g.fillRoundedRect(x, y, 228, 68, 4);
+          g.fillStyle(0x12141e, 1);
+          for (let i = 0; i < 4; i++)
+            g.fillRect(x + 12 + i * 53, y + 10, 43, 28);
+          g.fillStyle(0x0c0e18, 1);
+          g.fillCircle(x + 36, y + 70, 13);
+          g.fillCircle(x + 192, y + 70, 13);
+          g.lineStyle(2, 0x20223a, 1);
+          g.beginPath();
+          g.moveTo(x + 114, y);
+          g.lineTo(x + 114, y - 30);
+          g.strokePath();
+        }
+
+        drawPits(visible) {
+          this.eyePairs.forEach((ep) => {
+            try {
+              ep.destroy();
+            } catch (e) {}
+          });
+          this.eyePairs = [];
+          this.spikeImgs.forEach((s) => s.setVisible(visible));
+          this.drawCreatures();
+
+          this.pitZones.forEach((pit) => {
+            let ex = (pit.x1 + pit.x2) / 2;
+            let eyeG = this.add.graphics().setDepth(26);
+            this.eyePairs.push(eyeG);
+            let show = true;
+            this.time.addEvent({
+              delay: Phaser.Math.Between(1000, 2800),
+              repeat: -1,
+              callback: () => {
+                show = !show;
+                eyeG.clear();
+                if (show) {
+                  eyeG.fillStyle(0xff2200, 0.88);
+                  eyeG.fillEllipse(ex - 9, this.gY + 65, 9, 5);
+                  eyeG.fillEllipse(ex + 9, this.gY + 65, 9, 5);
+                  eyeG.fillStyle(0xff5500, 0.14);
+                  eyeG.fillEllipse(ex, this.gY + 65, 45, 18);
+                }
+              },
+            });
+          });
+        }
+
+        // Draws simple snake / scorpion silhouettes lurking in each pit —
+        // an always-visible danger cue distinct from the lit-up spikes.
+        drawCreatures() {
+          let g = this.creatureG;
+          g.clear();
+          this.creatures.forEach((c) => {
+            let wob = Math.sin(c.phase) * 6;
+            if (c.type === "scorpion") {
+              g.fillStyle(0x3a2418, 1);
+              // body
+              g.fillEllipse(c.cx + wob * 0.3, c.cy, 34, 14);
+              // tail curling up
+              g.lineStyle(5, 0x3a2418, 1);
+              g.beginPath();
+              g.moveTo(c.cx + 14 + wob * 0.3, c.cy - 2);
+              g.lineTo(c.cx + 24 + wob * 0.3, c.cy - 14);
+              g.lineTo(c.cx + 16 + wob * 0.3, c.cy - 24);
+              g.strokePath();
+              // stinger
+              g.fillStyle(0x5a2e1a, 1);
+              g.fillTriangle(
+                c.cx + 16 + wob * 0.3,
+                c.cy - 24,
+                c.cx + 22 + wob * 0.3,
+                c.cy - 30,
+                c.cx + 10 + wob * 0.3,
+                c.cy - 28,
+              );
+              // pincers
+              g.fillStyle(0x3a2418, 1);
+              g.fillEllipse(c.cx - 18 + wob * 0.3, c.cy - 4, 12, 7);
+              g.fillEllipse(c.cx - 24 + wob * 0.3, c.cy + 2, 10, 6);
+              // glowing eyes
+              g.fillStyle(0xff3300, 0.9);
+              g.fillCircle(c.cx - 12 + wob * 0.3, c.cy - 4, 2);
+              g.fillCircle(c.cx - 8 + wob * 0.3, c.cy - 4, 2);
+            } else {
+              // snake — coiled body with a raised head
+              g.fillStyle(0x2a3a20, 1);
+              g.fillEllipse(c.cx + wob, c.cy + 6, 46, 12);
+              g.fillEllipse(c.cx - 10 + wob * 0.6, c.cy, 28, 11);
+              // raised head
+              g.fillStyle(0x344a28, 1);
+              g.fillEllipse(c.cx + 14 + wob, c.cy - 8, 16, 12);
+              // glowing eyes
+              g.fillStyle(0xffee44, 0.95);
+              g.fillCircle(c.cx + 10 + wob, c.cy - 11, 2);
+              g.fillCircle(c.cx + 18 + wob, c.cy - 11, 2);
+              // tongue flick
+              g.fillStyle(0xcc3333, 0.8);
+              g.fillRect(c.cx + 22 + wob, c.cy - 8, 6, 1.5);
+            }
+          });
+        }
+
+        drawLiveFloor() {
+          this.liveG.clear();
+          this.liveG.fillStyle(0x0a1e88, 0.07);
+          this.liveG.fillRect(
+            this.liveX1,
+            this.gY - 10,
+            this.liveX2 - this.liveX1,
+            18,
+          );
+        }
+
+        createPlayer() {
+          this.player = this.add.sprite(160, this.gY, "stand").setDepth(60);
+          setPlayerAnim(this.player, this, "stand");
+        }
+
+        setAnim(name) {
+          setPlayerAnim(this.player, this, name);
+        }
+
+        showText(text, duration, callback) {
+          let t = this.add
+            .text(W / 2, H - 70, text, {
+              fontFamily: "EB Garamond",
+              fontStyle: "italic",
+              fontSize: "19px",
+              color: "#5e7888",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(320)
+            .setAlpha(0);
+          this.tweens.add({
+            targets: t,
+            alpha: 1,
+            duration: 700,
+            onComplete: () => {
+              this.time.delayedCall(duration, () => {
+                this.tweens.add({
+                  targets: t,
+                  alpha: 0,
+                  duration: 620,
+                  onComplete: () => {
+                    t.destroy();
+                    if (callback) callback();
+                  },
+                });
+              });
+            },
+          });
+        }
+
+        showPrompt(text) {
+          if (this.interactPrompt) this.interactPrompt.destroy();
+          let sx = this.player.x - this.cameras.main.scrollX;
+          let sy = this.player.y - PLAYER_H - 22;
+          this.interactPrompt = this.add
+            .text(sx, sy, text, {
+              fontFamily: "EB Garamond",
+              fontSize: "14px",
+              color: "#aabbcc",
+              backgroundColor: "#00000099",
+              padding: { x: 8, y: 4 },
+            })
+            .setOrigin(0.5)
+            .setDepth(320)
+            .setScrollFactor(0);
+        }
+
+        hidePrompt() {
+          if (this.interactPrompt) {
+            this.interactPrompt.destroy();
+            this.interactPrompt = null;
+          }
+        }
+
+        updateInventory() {
+          if (this.inventoryText) this.inventoryText.destroy();
+          let items = [];
+          if (this.hasRod) items.push("⚡ Metal Rod");
+          if (this.rubberCount > 0)
+            items.push(`🟫 Rubber ×${this.rubberCount}`);
+          if (!items.length) return;
+          this.inventoryText = this.add
+            .text(16, 16, items.join("   "), {
+              fontFamily: "EB Garamond",
+              fontSize: "14px",
+              color: "#7a8ea0",
+              backgroundColor: "#00000099",
+              padding: { x: 8, y: 5 },
+            })
+            .setScrollFactor(0)
+            .setDepth(320);
+        }
+
+        die(type) {
+          if (this.isDead) return;
+          this.isDead = true;
+          this.hidePrompt();
+          this.setAnim("death");
+          this.cameras.main.shake(320, 0.022);
+
+          let fl = this.add
+            .rectangle(
+              W / 2,
+              H / 2,
+              W,
+              H,
+              type === "electric" ? 0x0e1e88 : 0x000000,
+              type === "electric" ? 0.55 : 0.9,
+            )
+            .setScrollFactor(0)
+            .setDepth(460)
+            .setAlpha(type === "electric" ? 0.55 : 0.9);
+
+          let dt = this.add
+            .text(W / 2, H / 2, "...", {
+              fontFamily: "EB Garamond",
+              fontSize: "60px",
+              color: type === "electric" ? "#3355cc" : "#1c2a38",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(461)
+            .setAlpha(0);
+
+          this.tweens.add({ targets: dt, alpha: 1, duration: 330 });
+          this.time.delayedCall(2100, () => {
+            this.tweens.add({
+              targets: [fl, dt],
+              alpha: 0,
+              duration: 680,
+              onComplete: () => {
+                fl.destroy();
+                dt.destroy();
+                this.respawn();
+              },
+            });
+          });
+        }
+
+        respawn() {
+          this.player.x = this.respawnX;
+          this.player.y = this.respawnY;
+          this.pVY = 0;
+          this.isDead = false;
+          this.setAnim("stand");
+        }
+
+        solvePuzzle1() {
+          this.p1Solved = true;
+          this.hasRod = false;
+          this.hidePrompt();
+          this.fuseBoxSparkG.clear();
+          this.fuseBoxImg.setTint(0x1e4422);
+
+          let ok = this.add.graphics().setDepth(20);
+          ok.fillStyle(0x00ee44, 0.92);
+          ok.fillCircle(this.fuseBoxX, this.fuseBoxY - 52, 10);
+
+          this.cameras.main.flash(780, 255, 185, 80, false);
+
+          this.time.delayedCall(180, () => this.turnLampOn(2));
+          this.time.delayedCall(620, () => this.turnLampOn(3));
+          this.time.delayedCall(1080, () => this.turnLampOn(4));
+          this.time.delayedCall(400, () => this.drawPits(true));
+          this.time.delayedCall(400, () => {
+            this.tweens.add({
+              targets: this.pitDarkness,
+              alpha: 0,
+              duration: 1400,
+            });
+          });
+          this.time.delayedCall(980, () => {
+            this.tweens.add({
+              targets: this.door1,
+              x: "+=140",
+              duration: 960,
+              ease: "Power2",
+            });
+          });
+
+          this.respawnX = 1250;
+          this.updateInventory();
+          this.showText("The circuit is complete.", 2300, () => {
+            this.showText("Now I can see what was hiding in the dark.", 3200);
+          });
+        }
+
+        solvePuzzle2() {
+          this.p2Solved = true;
+          this.hidePrompt();
+          this.liveSparkG.clear();
+          this.liveG.clear();
+
+          this.cameras.main.flash(500, 80, 160, 255, false);
+          this.leverImg.setTexture("switch_green_on");
+
+          this.time.delayedCall(340, () => this.turnLampOn(5));
+          this.time.delayedCall(780, () => this.turnLampOn(6));
+          this.time.delayedCall(1100, () => {
+            this.tweens.add({
+              targets: this.door2,
+              x: "+=140",
+              duration: 960,
+              ease: "Power2",
+            });
+          });
+
+          this.respawnX = 4900;
+          this.updateInventory();
+          this.showText("Rubber blocks the current.", 2100, () => {
+            this.showText("Some materials protect. Others carry.", 2900, () => {
+              this.time.delayedCall(1600, () => {
+                this.cameras.main.fade(1900, 0, 0, 0);
+                if (this.music)
+                  this.tweens.add({
+                    targets: this.music,
+                    volume: 0,
+                    duration: 1900,
+                  });
+                this.time.delayedCall(1900, () => {
+                  if (this.music) this.music.stop();
+                  this.scene.start("EndingScene");
+                });
+              });
+            });
+          });
+        }
+
+        update(time, delta) {
+          if (this.isDead) return;
+          tickRain(this.rain, delta);
+          tickGrain(this.grain, delta);
+
+          if (!this.p2Solved) {
+            this.arcTimer += delta;
+            if (this.arcTimer > 160) {
+              this.arcTimer = 0;
+              this.liveG.clear();
+              this.liveG.fillStyle(0x0a1e88, 0.07);
+              this.liveG.fillRect(
+                this.liveX1,
+                this.gY - 10,
+                this.liveX2 - this.liveX1,
+                18,
+              );
+              this.liveG.lineStyle(1, 0x4488ff, 0.55);
+              this.liveG.beginPath();
+              let ax = this.liveX1;
+              this.liveG.moveTo(ax, this.gY - 4);
+              while (ax < this.liveX2) {
+                ax += Phaser.Math.Between(18, 42);
+                this.liveG.lineTo(ax, this.gY - Phaser.Math.Between(2, 15));
+              }
+              this.liveG.strokePath();
+            }
+          }
+
+          if (this.creatures) {
+            this.creatures.forEach((c) => (c.phase += delta * 0.003));
+            this.drawCreatures();
+          }
+
+          this.movePlayer(delta);
+          this.checkInteract();
+          this.updatePrompt();
+        }
+
+        // Returns the ground surface Y at a given x, accounting for the
+        // raised pillar-hop platforms and the pit gaps between them.
+        // Returns null if px is over a pit (no ground — player falls through).
+        groundYAt(px) {
+          if (this.pillars) {
+            for (let p of this.pillars) {
+              if (px > p.x1 && px < p.x2) return p.top;
+            }
+          }
+          if (this.pitZones) {
+            for (let pit of this.pitZones) {
+              if (px > pit.x1 && px < pit.x2) return null;
+            }
+          }
+          return this.gY;
+        }
+
+        movePlayer(delta) {
+          let dt = delta / 1000;
+          let px = this.player.x,
+            py = this.player.y;
+          let wasOnGround = this.onGround;
+
+          this.pVY += this.gravity * dt;
+          py += this.pVY * dt;
+
+          let groundY = this.groundYAt(px);
+
+          if (groundY !== null && py >= groundY) {
+            if (!wasOnGround && this.pVY > 200) {
+              this.isLanding = true;
+              this.setAnim("land");
+              this.player.once("animationcomplete", () => {
+                this.isLanding = false;
+              });
+            }
+            py = groundY;
+            this.pVY = 0;
+            this.onGround = true;
+          } else {
+            this.onGround = false;
+          }
+
+          let moving = false;
+          if (!this.isLanding) {
+            if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 25) {
+              px -= this.speed * dt;
+              this.player.setFlipX(true);
+              moving = true;
+            }
+            if (this.cursors.right.isDown || this.wasd.D.isDown) {
+              px += this.speed * dt;
+              this.player.setFlipX(false);
+              moving = true;
+            }
+            if (
+              (this.cursors.up.isDown ||
+                this.cursors.space.isDown ||
+                this.wasd.W.isDown) &&
+              this.onGround
+            ) {
+              this.pVY = -390;
+              this.setAnim("jump");
+            }
+          }
+
+          if (!this.isLanding) {
+            if (!this.onGround) {
+              this.setAnim(this.pVY < 0 ? "jump" : "fall");
+            } else if (moving) {
+              this.setAnim("run");
+            } else {
+              this.setAnim("stand");
+            }
+          }
+
+          this.pitZones.forEach((pit) => {
+            if (px > pit.x1 + 5 && px < pit.x2 - 5 && py >= this.gY - 10)
+              this.die("pit");
+          });
+          if (!this.p2Solved && px > this.liveX1 && px < this.liveX2) {
+            if (!this.safeZones.some((z) => px > z.x1 && px < z.x2))
+              this.die("electric");
+          }
+
+          this.player.x = px;
+          this.player.y = py;
+        }
+
+        checkInteract() {
+          let px = this.player.x;
+
+          if (
+            !this.hasRod &&
+            !this.rodCollected &&
+            Math.abs(px - (this.rodX + 40)) < 80
+          ) {
+            this.nearRod = true;
+            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              this.rodCollected = true;
+              this.hasRod = true;
+              this.rodG.setVisible(false);
+              this.updateInventory();
+              this.showText("It's a metal rod.", 2000);
+            }
+          } else {
+            this.nearRod = false;
+          }
+
+          if (!this.p1Solved && Math.abs(px - this.fuseBoxX) < 80) {
+            this.nearFuseBox = true;
+            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              if (this.hasRod) {
+                this.solvePuzzle1();
+              } else {
+                this.fuseAttempts++;
+                if (this.fuseAttempts === 1) {
+                  this.showText("It's broken. Something is missing.", 2200);
+                } else if (this.fuseAttempts >= 2) {
+                  this.showText(
+                    "I need something to bridge the connection — maybe I can find it nearby.",
+                    2800,
+                  );
+                }
+              }
+            }
+          } else {
+            this.nearFuseBox = false;
+          }
+
+          this.nearRubber = [];
+          this.rubberBlocks.forEach((b, i) => {
+            if (!b.collected && Math.abs(px - b.x) < 70) {
+              this.nearRubber.push(i);
+              if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+                b.collected = true;
+                b.img.setVisible(false);
+                this.rubberCount++;
+                this.updateInventory();
+              }
+            }
+          });
+
+          if (
+            this.rubberCount > 0 &&
+            px > this.liveX1 - 90 &&
+            px < this.liveX2 + 90
+          ) {
+            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              this.add
+                .image(px, this.gY, "crate_blue1")
+                .setOrigin(0.5, 1)
+                .setDisplaySize(60, 60)
+                .setDepth(30);
+              let sg = this.add.graphics().setDepth(29);
+              sg.fillStyle(0x00aa44, 0.09);
+              sg.fillRect(px - 27, this.gY - 54, 54, 54);
+              this.safeZones.push({ x1: px - 27, x2: px + 27 });
+              this.rubberCount--;
+              this.rubberPlaced++;
+              this.updateInventory();
+              if (this.rubberPlaced >= 3)
+                this.time.delayedCall(420, () => this.solvePuzzle2());
+            }
+          }
+        }
+
+        updatePrompt() {
+          let px = this.player.x;
+          let sx = px - this.cameras.main.scrollX;
+          let sy = this.player.y - PLAYER_H - 22;
+
+          if (
+            !this.hasRod &&
+            !this.rodCollected &&
+            Math.abs(px - (this.rodX + 40)) < 80
+          )
+            this.showPrompt("[E]  Pick up metal rod");
+          else if (this.nearFuseBox && this.hasRod)
+            this.showPrompt("[E]  Connect rod to fuse box");
+          else if (this.nearFuseBox && !this.hasRod)
+            this.showPrompt("Something is broken here...");
+          else if (this.nearRubber.length > 0)
+            this.showPrompt("[E]  Pick up rubber block");
+          else if (
+            this.rubberCount > 0 &&
+            px > this.liveX1 - 90 &&
+            px < this.liveX2 + 90
+          )
+            this.showPrompt("[E]  Place rubber block");
+          else this.hidePrompt();
+
+          if (this.interactPrompt) {
+            this.interactPrompt.x = sx;
+            this.interactPrompt.y = sy;
+          }
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // ENDING SCENE
+      // ════════════════════════════════════════════════════════════════
+      class EndingScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "EndingScene" });
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#080c14");
+          this.cameras.main.fadeIn(2000);
+
+          this.add
+            .image(0, 0, "sky")
+            .setOrigin(0, 0)
+            .setDisplaySize(W, H)
+            .setAlpha(0.83);
+          this.add
+            .image(0, H, "distantCity")
+            .setOrigin(0, 1)
+            .setDisplaySize(W, 270)
+            .setAlpha(0.72);
+          this.add
+            .image(0, H, "midBuildings")
+            .setOrigin(0, 1)
+            .setDisplaySize(W * 1.2, 345)
+            .setAlpha(0.68);
+
+          let g = this.add.graphics();
+          g.fillStyle(0x121820, 1);
+          g.fillRect(0, H - 65, W, 65);
+          g.fillGradientStyle(
+            0x000000,
+            0x000000,
+            0x000000,
+            0x000000,
+            0,
+            0,
+            0.88,
+            0.88,
+          );
+          g.fillRect(0, H - 220, W, 220);
+
+          this.time.delayedCall(900, () => {
+            for (let i = 0; i < 52; i++) {
+              this.time.delayedCall(i * 80, () => {
+                let wx = Phaser.Math.Between(26, W - 26);
+                let wy = Phaser.Math.Between(95, 530);
+                let wg = this.add.graphics();
+                wg.fillStyle(0xd4780a, 0.9);
+                wg.fillRect(wx, wy, 14, 18);
+                wg.setAlpha(0);
+                this.tweens.add({ targets: wg, alpha: 1, duration: 200 });
+                let gl = this.add.graphics();
+                gl.fillStyle(0xd4780a, 0.055);
+                gl.fillCircle(wx + 7, wy + 9, 44);
+                gl.setAlpha(0);
+                this.tweens.add({
+                  targets: gl,
+                  alpha: 1,
+                  duration: 400,
+                  delay: i * 80,
+                });
+              });
+            }
+          });
+
+          this.time.delayedCall(3400, () => {
+            let tg = this.add.graphics().setDepth(10);
+            tg.fillStyle(0x1a1c2a, 1);
+            tg.fillRoundedRect(0, H - 128, 228, 68, 4);
+            tg.fillStyle(0xb07818, 0.92);
+            for (let i = 0; i < 4; i++)
+              tg.fillRect(12 + i * 53, H - 118, 43, 28);
+            tg.fillStyle(0xd4780a, 0.062);
+            tg.fillRoundedRect(-38, H - 162, 304, 114, 9);
+            tg.x = -258;
+            this.tweens.add({
+              targets: tg,
+              x: W + 110,
+              duration: 7200,
+              ease: "Sine.InOut",
+            });
+          });
+
+          mkBars(this, 600);
+          mkVignette(this, 595);
+          this.rain = mkRain(this, 155, 100);
+          this.grain = mkGrain(this, 500);
+
+          this.time.delayedCall(1700, () =>
+            this.ft("The circuit is complete.", H / 2 - 38, "#4d6270", "20px"),
+          );
+          this.time.delayedCall(4400, () =>
+            this.ft("The city remembers you.", H / 2 + 8, "#5d7280", "22px"),
+          );
+          this.time.delayedCall(7400, () =>
+            this.ft("To be continued...", H / 2 + 65, "#c8a050", "30px"),
+          );
+
+          this.time.delayedCall(10800, () => {
+            let dark = this.add
+              .rectangle(W / 2, H / 2, W, H, 0x000000)
+              .setAlpha(0)
+              .setDepth(380);
+            this.tweens.add({
+              targets: dark,
+              alpha: 0.95,
+              duration: 2500,
+              onComplete: () => {
+                [
+                  {
+                    t: "THE SLEEPING CITY",
+                    y: H / 2 - 72,
+                    s: "64px",
+                    c: "#c8a050",
+                    f: "Cinzel",
+                  },
+                  {
+                    t: "Restore Power. Awaken Hope.",
+                    y: H / 2 + 16,
+                    s: "24px",
+                    c: "#668090",
+                    f: "EB Garamond",
+                  },
+                  {
+                    t: "Designed by Roky Paul  |  Null Paradox  |  PW Games × IOI Hackathon",
+                    y: H / 2 + 72,
+                    s: "14px",
+                    c: "#3d5060",
+                    f: "EB Garamond",
+                  },
+                  {
+                    t: "[ SPACE ] Play Again",
+                    y: H / 2 + 112,
+                    s: "14px",
+                    c: "#2d3d48",
+                    f: "EB Garamond",
+                  },
+                ].forEach((item, i) => {
+                  this.add
+                    .text(W / 2, item.y, item.t, {
+                      fontFamily: item.f,
+                      fontSize: item.s,
+                      color: item.c,
+                    })
+                    .setOrigin(0.5)
+                    .setDepth(400)
+                    .setAlpha(0);
+                  let tx = this.children.list[this.children.list.length - 1];
+                  this.tweens.add({
+                    targets: tx,
+                    alpha: 1,
+                    duration: 1400,
+                    delay: i * 360,
+                  });
+                });
+                this.input.keyboard.once("keydown-SPACE", () => {
+                  this.cameras.main.fade(1100, 0, 0, 0);
+                  this.time.delayedCall(1100, () =>
+                    this.scene.start("TitleScene"),
+                  );
+                });
+              },
+            });
+          });
+        }
+
+        ft(text, y, color, size) {
+          let t = this.add
+            .text(W / 2, y, text, {
+              fontFamily: "EB Garamond",
+              fontStyle: "italic",
+              fontSize: size,
+              color: color,
+            })
+            .setOrigin(0.5)
+            .setDepth(300)
+            .setAlpha(0);
+          this.tweens.add({ targets: t, alpha: 1, duration: 1050 });
+        }
+
+        update(time, delta) {
+          tickRain(this.rain, delta);
+          tickGrain(this.grain, delta);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // BOOT
+      // ════════════════════════════════════════════════════════════════
+      window.game = new Phaser.Game({
+        type: Phaser.AUTO,
+        width: W,
+        height: H,
+        backgroundColor: "#000000",
+        scale: {
+          mode: Phaser.Scale.FIT,
+          autoCenter: Phaser.Scale.CENTER_BOTH,
+        },
+        scene: [
+          PreloadScene,
+          TitleScene,
+          OutsideScene,
+          TunnelScene,
+          FallScene,
+          CityScene,
+          EndingScene,
+        ],
+      });
+    </script>
+  </body>
+</html>
