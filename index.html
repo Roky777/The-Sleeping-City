@@ -810,6 +810,102 @@
 
           this.buildCollectibles();
           this.buildHintButton();
+          this.showControlsOverlay();
+        }
+
+        // ── Controls overlay — shown once at the start, dismiss with any key/click ──
+        showControlsOverlay() {
+          this.controlsBlocking = true;
+
+          let overlay = this.add
+            .rectangle(W / 2, H / 2, W, H, 0x000000, 0.72)
+            .setScrollFactor(0)
+            .setDepth(800);
+
+          let panel = this.add.graphics().setScrollFactor(0).setDepth(801);
+          panel.fillStyle(0x10141c, 0.95);
+          panel.fillRoundedRect(W / 2 - 260, H / 2 - 170, 520, 340, 10);
+          panel.lineStyle(1.5, 0x3a4a60, 0.8);
+          panel.strokeRoundedRect(W / 2 - 260, H / 2 - 170, 520, 340, 10);
+
+          let elements = [overlay, panel];
+
+          let title = this.add
+            .text(W / 2, H / 2 - 138, "How to Play", {
+              fontFamily: "Cinzel",
+              fontSize: "26px",
+              color: "#c8a050",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(802);
+          elements.push(title);
+
+          let rows = [
+            ["← → / A D", "Move left / right"],
+            ["↑ / W / Space", "Jump"],
+            ["E", "Interact — pick up, use, open"],
+            ["F", "Confirm a placed item (used later)"],
+            ["Mouse", "Click to rotate / drag pieces in puzzles"],
+          ];
+          rows.forEach((row, i) => {
+            let y = H / 2 - 84 + i * 38;
+            let keyText = this.add
+              .text(W / 2 - 230, y, row[0], {
+                fontFamily: "EB Garamond",
+                fontSize: "18px",
+                color: "#e8c878",
+                backgroundColor: "#00000066",
+                padding: { x: 10, y: 5 },
+              })
+              .setOrigin(0, 0.5)
+              .setScrollFactor(0)
+              .setDepth(802);
+            let descText = this.add
+              .text(W / 2 + 10, y, row[1], {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "17px",
+                color: "#aabbcc",
+              })
+              .setOrigin(0, 0.5)
+              .setScrollFactor(0)
+              .setDepth(802);
+            elements.push(keyText, descText);
+          });
+
+          let press = this.add
+            .text(W / 2, H / 2 + 140, "Press any key or click to begin", {
+              fontFamily: "EB Garamond",
+              fontStyle: "italic",
+              fontSize: "15px",
+              color: "#7a8ea0",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(802);
+          elements.push(press);
+
+          this.tweens.add({
+            targets: press,
+            alpha: { from: 0.4, to: 1 },
+            duration: 900,
+            yoyo: true,
+            repeat: -1,
+          });
+
+          const dismiss = () => {
+            this.controlsBlocking = false;
+            this.tweens.add({
+              targets: elements,
+              alpha: 0,
+              duration: 400,
+              onComplete: () => elements.forEach((el) => el.destroy()),
+            });
+          };
+
+          this.input.keyboard.once("keydown", dismiss);
+          this.input.once("pointerdown", dismiss);
         }
 
         // ── SKY: storm clouds + occasional lightning ──
@@ -1289,7 +1385,7 @@
           });
 
           // Head of the mouse — deeper inside the ruins, a separate landmark
-          this.mouseHeadX = this.treeX - 80;
+          this.mouseHeadX = this.catX + (this.treeX - this.catX) / 2;
           this.mouseHeadY = this.gY - 2;
           this.buildGlowMarker(this.mouseHeadX, this.mouseHeadY);
           this.mouseHeadBeacon = this.buildItemBeacon(
@@ -1503,10 +1599,10 @@
             return;
           }
           let nearRange = Math.abs(px - itemX) < 150 && py >= this.gY;
-          let pickupRange = Math.abs(px - itemX) < 60 && py >= this.gY;
+          let pickupRange = Math.abs(px - itemX) < 90 && py >= this.gY;
 
           if (nearRange) {
-            this.showItemLabel(key, itemX, descLabel);
+            this.showItemLabel(key, itemX, descLabel, pickupRange);
           } else {
             this.hideItemLabel(key);
           }
@@ -1566,18 +1662,30 @@
           }
         }
 
-        // Ambient floating label above an item, shown while the player is nearby
-        // but hasn't picked it up yet (purely descriptive — no instructions).
-        showItemLabel(key, itemX, descLabel) {
+        // Ambient floating label above an item, shown while the player is nearby.
+        // Once close enough to interact, the label switches to show the [E] prompt.
+        showItemLabel(key, itemX, descLabel, canPickup) {
           if (!this.itemLabels) this.itemLabels = {};
-          if (this.itemLabels[key]) return;
           let itemY = this.gY - 80;
-          this.itemLabels[key] = this.add
-            .text(itemX - this.cameras.main.scrollX, itemY, descLabel, {
+          let text = canPickup ? descLabel + "   [E] Pick up" : descLabel;
+          let color = canPickup ? "#e8c878" : "#cdbfa0";
+
+          if (this.itemLabels[key]) {
+            let lbl = this.itemLabels[key];
+            if (lbl._text !== text) {
+              lbl.setText(text);
+              lbl.setColor(color);
+              lbl._text = text;
+            }
+            return;
+          }
+
+          let lbl = this.add
+            .text(itemX - this.cameras.main.scrollX, itemY, text, {
               fontFamily: "EB Garamond",
               fontStyle: "italic",
               fontSize: "14px",
-              color: "#cdbfa0",
+              color: color,
               backgroundColor: "#00000088",
               padding: { x: 6, y: 3 },
             })
@@ -1585,8 +1693,10 @@
             .setScrollFactor(0)
             .setDepth(310)
             .setAlpha(0);
+          lbl._text = text;
+          this.itemLabels[key] = lbl;
           this.tweens.add({
-            targets: this.itemLabels[key],
+            targets: lbl,
             alpha: 1,
             duration: 400,
           });
@@ -1632,7 +1742,7 @@
             .setScrollFactor(0)
             .setDepth(700)
             .setInteractive({ useHandCursor: true })
-            .setVisible(false);
+            .setAlpha(0.5);
 
           this.hintBtn.on("pointerover", () =>
             this.hintBtn.setColor("#ffffff"),
@@ -1657,7 +1767,10 @@
           } else if (this.collectedCount > 0) {
             this.showHint("Fragments of a forgotten toy lie scattered.", 3600);
           } else {
-            this.showHint("Something out here doesn't feel quite right.");
+            this.showHint(
+              "Walk with ← → (or A/D), jump with ↑ / W / Space. Look for glowing markers on the ground — press [E] near them.",
+              4200,
+            );
           }
         }
         // ── Ambient fireflies scattered across the field ──
@@ -1717,17 +1830,17 @@
           let text = hint.text;
           let duration = hint.duration;
           let t = this.add
-            .text(W / 2, H - 86, text, {
+            .text(W / 2, H - 29, text, {
               fontFamily: "EB Garamond",
               fontStyle: "italic",
               fontSize: "19px",
-              color: "#7a8da0",
+              color: "#ffffff",
               align: "center",
               wordWrap: { width: W - 300 },
             })
             .setOrigin(0.5)
             .setScrollFactor(0)
-            .setDepth(400)
+            .setDepth(610)
             .setAlpha(0);
           this.tweens.add({
             targets: t,
@@ -2278,6 +2391,63 @@
           };
           [outFinal, outBody, headSlot, tailSlot, batterySlot].forEach(drawBox);
 
+          // Small labels identifying each slot — shown only while empty
+          const addSlotLabel = (box, text) => {
+            let lbl = this.add
+              .text(box.x, box.y + box.h / 2 + 14, text, {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "13px",
+                color: "#9aa8b8",
+                align: "center",
+              })
+              .setOrigin(0.5)
+              .setScrollFactor(0)
+              .setDepth(701);
+            this.mpElements.push(lbl);
+            box.label = lbl;
+          };
+          addSlotLabel(headSlot, "Head");
+          addSlotLabel(tailSlot, "Tail");
+          addSlotLabel(outBody, "Mouse Body");
+          addSlotLabel(batterySlot, "Battery");
+          addSlotLabel(outFinal, "Complete Toy");
+
+          // Step guide text — explains the two-stage recipe
+          let step1 = this.add
+            .text(
+              (headSlot.x + tailSlot.x) / 2,
+              headSlot.y - headSlot.h / 2 - 28,
+              "Step 1 — Combine Head + Tail",
+              {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "14px",
+                color: "#d96a78",
+              },
+            )
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(701);
+          this.mpElements.push(step1);
+
+          let step2 = this.add
+            .text(
+              (outBody.x + batterySlot.x) / 2,
+              outBody.y + outBody.h / 2 + 38,
+              "Step 2 — Add the Battery",
+              {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "14px",
+                color: "#d96a78",
+              },
+            )
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(701);
+          this.mpElements.push(step2);
+
           // "+" between head and tail
           let plus1 = this.add
             .text((headSlot.x + tailSlot.x) / 2, headSlot.y, "+", {
@@ -2419,7 +2589,11 @@
           }
 
           // vacate old slot if any
-          if (item.placedSlot) slots[item.placedSlot].filled = null;
+          if (item.placedSlot) {
+            slots[item.placedSlot].filled = null;
+            if (slots[item.placedSlot].label)
+              slots[item.placedSlot].label.setVisible(true);
+          }
 
           // mouseBody has nowhere else to go — it always belongs in outBody
           if (!target && item.type === "mouseBody") target = "outBody";
@@ -2432,6 +2606,7 @@
             item.y = slot.y;
             item.handle.x = slot.x;
             item.handle.y = slot.y;
+            if (slot.label) slot.label.setVisible(false);
           } else {
             item.placedSlot = null;
             item.x = item.homeX;
@@ -2543,6 +2718,9 @@
             };
             this.mpDraggables.push(bodyItem);
             slots.outBody.filled = bodyItem;
+            if (slots.outBody.label) slots.outBody.label.setVisible(false);
+            if (slots.headSlot.label) slots.headSlot.label.setVisible(true);
+            if (slots.tailSlot.label) slots.tailSlot.label.setVisible(true);
 
             handle.on("drag", (pointer, dragX, dragY) => {
               bodyItem.x = dragX;
@@ -2712,7 +2890,13 @@
           tickRain(this.rain, delta);
           tickGrain(this.grain, delta);
 
-          if (this.triggered || this.puzzleOpen || this.mousePuzzleOpen) return;
+          if (
+            this.triggered ||
+            this.puzzleOpen ||
+            this.mousePuzzleOpen ||
+            this.controlsBlocking
+          )
+            return;
 
           let dt = delta / 1000;
           let px = this.player.x,
@@ -3213,10 +3397,11 @@
           this.nearRod = false;
           // ── Pond crossing (Puzzle 2) ──
           this.pondX1 = 4300;
-          this.pondX2 = 4900;
+          this.pondX2 = 5100;
           this.plates = { rubber: false, metal: false, wood: false };
           this.plateOrder = ["rubber", "metal", "wood"];
           this.plateSelectIndex = 0;
+          this.plateSelected = false;
           this.placedPlate = null; // { type, img, x }
           this.isFloating = false;
           this.crossingFinished = false;
@@ -3449,7 +3634,7 @@
             .setDepth(4);
 
           // Lamps: 0,1 intro | 2 fuse box | 3,4 breather zone | 5,6 pond crossing
-          [225, 628, 880, 2550, 3200, 4150, 5000].forEach((x, i) =>
+          [225, 628, 880, 2550, 3200, 4150, 5180].forEach((x, i) =>
             this.mkLamp(x, i),
           );
           this.drawPowerLines();
@@ -3998,16 +4183,30 @@
         }
 
         showText(text, duration, callback) {
+          if (!this.textQueue) this.textQueue = [];
+          if (duration == null) duration = Math.max(2000, text.length * 65);
+          this.textQueue.push({ text, duration, callback });
+          if (!this.textActive) this._playNextText();
+        }
+
+        _playNextText() {
+          if (!this.textQueue || this.textQueue.length === 0) {
+            this.textActive = false;
+            return;
+          }
+          this.textActive = true;
+          let { text, duration, callback } = this.textQueue.shift();
+
           let t = this.add
-            .text(W / 2, H - 70, text, {
+            .text(W / 2, H - 29, text, {
               fontFamily: "EB Garamond",
               fontStyle: "italic",
               fontSize: "19px",
-              color: "#5e7888",
+              color: "#ffffff",
             })
             .setOrigin(0.5)
             .setScrollFactor(0)
-            .setDepth(320)
+            .setDepth(610)
             .setAlpha(0);
           this.tweens.add({
             targets: t,
@@ -4022,6 +4221,7 @@
                   onComplete: () => {
                     t.destroy();
                     if (callback) callback();
+                    this._playNextText();
                   },
                 });
               });
@@ -4449,8 +4649,21 @@
           if (this.nearPond) {
             let haveAny = this.plateOrder.some((t) => this.plates[t]);
             if (haveAny) {
+              if (!this.pondHintShown) {
+                this.pondHintShown = true;
+                this.showText(
+                  "Press [E] to choose a plate, then [F] to lay it down.",
+                  3200,
+                );
+              }
               if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
                 // cycle to the next plate the player actually has
+                if (!this.plateSelected) {
+                  this.plateSelected = true;
+                  // start from the first plate the player has, without
+                  // auto-defaulting to rubber
+                  this.plateSelectIndex = -1;
+                }
                 for (let n = 0; n < this.plateOrder.length; n++) {
                   this.plateSelectIndex =
                     (this.plateSelectIndex + 1) % this.plateOrder.length;
@@ -4458,7 +4671,10 @@
                     break;
                 }
               }
-              if (Phaser.Input.Keyboard.JustDown(this.fKey)) {
+              if (
+                this.plateSelected &&
+                Phaser.Input.Keyboard.JustDown(this.fKey)
+              ) {
                 let type = this.plateOrder[this.plateSelectIndex];
                 if (this.plates[type]) this.placePlate(type);
               }
@@ -4533,9 +4749,15 @@
           else if (this.nearPond) {
             let haveAny = this.plateOrder.some((t) => this.plates[t]);
             if (haveAny) {
-              let cur = this.plateOrder[this.plateSelectIndex];
-              let label = this.plates[cur] ? this.plateDefs[cur].label : "...";
-              this.showPrompt("[E]  Cycle   [F]  Place — " + label);
+              if (!this.plateSelected) {
+                this.showPrompt("[E]  Choose a plate");
+              } else {
+                let cur = this.plateOrder[this.plateSelectIndex];
+                let label = this.plates[cur]
+                  ? this.plateDefs[cur].label
+                  : "...";
+                this.showPrompt("[E]  Cycle   [F]  Place — " + label);
+              }
             } else {
               this.showPrompt("The water is too deep to cross like this.");
             }
