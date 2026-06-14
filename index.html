@@ -6,24 +6,8 @@
     <link
       href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=EB+Garamond:ital@0;1&display=swap"
       rel="stylesheet" />
-    <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
-      body {
-        background: #000;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        overflow: hidden;
-      }
-      canvas {
-        display: block;
-      }
-    </style>
+    <link rel="stylesheet" href="./app.css" />
+    <style></style>
   </head>
   <body>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
@@ -3453,6 +3437,17 @@
           this.time.delayedCall(8800, () =>
             this.showText("I need to find a way home.", 2800),
           );
+
+          // ── Ambient lines triggered by distance traveled ──
+          this.ambientLines = [
+            {
+              x: 2700,
+              text: "The hum of old machines... still breathing.",
+              shown: false,
+            },
+            { x: 3500, text: "Quiet here. Almost peaceful.", shown: false },
+            { x: 4200, text: "I can hear water ahead.", shown: false },
+          ];
         }
 
         // ── Background ─────────────────────────────────────────────
@@ -3894,6 +3889,45 @@
             .setOrigin(0.5, 1)
             .setDisplaySize(44, 44)
             .setDepth(5);
+
+          // ═══ THE HOLE — right past the pond, waiting in the fog ═══
+          this.holeX = 5450;
+          this.holeFallen = false;
+
+          // Fog bank that thickens once the pond is crossed
+          this.holeFogG = this.add
+            .graphics()
+            .setScrollFactor(0.3)
+            .setDepth(45)
+            .setAlpha(0);
+          this.holeFogG.fillStyle(0x1a2230, 0.55);
+          this.holeFogG.fillRect(this.pondX2, 0, this.worldW - this.pondX2, H);
+          this.holeFogG.fillStyle(0x222c3c, 0.35);
+          this.holeFogG.fillEllipse(this.holeX, this.gY - 80, 700, 420);
+
+          // The hole itself — dark void with a rising orange glow
+          this.holeGlowG = this.add.graphics().setDepth(46).setAlpha(0);
+          this.holeGlowG.fillStyle(0xd4780a, 0.1);
+          this.holeGlowG.fillEllipse(this.holeX, this.gY + 12, 320, 110);
+          this.holeGlowG.fillStyle(0xe89030, 0.16);
+          this.holeGlowG.fillEllipse(this.holeX, this.gY + 12, 200, 70);
+
+          this.holeVoidG = this.add.graphics().setDepth(47);
+          this.holeVoidG.fillStyle(0x000000, 1);
+          this.holeVoidG.fillEllipse(this.holeX, this.gY + 4, 170, 50);
+          this.holeVoidG.fillRect(
+            this.holeX - 85,
+            this.gY + 4,
+            170,
+            H - this.gY,
+          );
+
+          this.add
+            .image(this.holeX - 30, this.gY - 150, "sign_warning_triangle")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(40, 40)
+            .setDepth(48)
+            .setAlpha(0.85);
 
           //   this.door2 = this.add
           //     .image(5050, this.gY, "door")
@@ -4388,20 +4422,16 @@
         // reaches the far bank — the true end of the crossing.
         finishCrossing() {
           this.crossingFinished = true;
-          this.showText("Solid ground.", 2000, () => {
-            this.time.delayedCall(1200, () => {
-              this.cameras.main.fade(1900, 0, 0, 0);
-              if (this.music)
-                this.tweens.add({
-                  targets: this.music,
-                  volume: 0,
-                  duration: 1900,
-                });
-              this.time.delayedCall(1900, () => {
-                if (this.music) this.music.stop();
-                this.scene.start("EndingScene");
-              });
-            });
+          this.showText("Solid ground.", 2200, () => {
+            this.showText("Something else lies just ahead.", 2600);
+          });
+          // Fog thickens and the hole's glow begins to show through it
+          this.tweens.add({ targets: this.holeFogG, alpha: 1, duration: 2400 });
+          this.tweens.add({
+            targets: this.holeGlowG,
+            alpha: 1,
+            duration: 2800,
+            delay: 600,
           });
         }
 
@@ -4420,6 +4450,15 @@
           if (this.creatures) {
             this.creatures.forEach((c) => (c.phase += delta * 0.003));
             this.drawCreatures();
+          }
+
+          if (this.ambientLines) {
+            this.ambientLines.forEach((line) => {
+              if (!line.shown && this.player.x >= line.x) {
+                line.shown = true;
+                this.showText(line.text, 2600);
+              }
+            });
           }
 
           this.movePlayer(delta);
@@ -4452,10 +4491,19 @@
             }
             return null;
           }
+          // The hole, just past the pond — opens once the crossing is done
+          if (
+            this.crossingFinished &&
+            px > this.holeX - 85 &&
+            px < this.holeX + 85
+          ) {
+            return null;
+          }
           return this.gY;
         }
 
         movePlayer(delta) {
+          if (this.holeFallen) return;
           let dt = delta / 1000;
           let px = this.player.x,
             py = this.player.y;
@@ -4576,6 +4624,44 @@
               }
               this.solvePuzzle2();
               this.time.delayedCall(2600, () => this.finishCrossing());
+            }
+          }
+
+          // ── Falling into the hole, just past the pond ──
+          if (this.crossingFinished && !this.holeFallen) {
+            if (!this.holeHintShown && Math.abs(px - this.holeX) < 260) {
+              this.holeHintShown = true;
+              this.showText("Something waits below.", 2400);
+            }
+            if (
+              px > this.holeX - 85 &&
+              px < this.holeX + 85 &&
+              py >= this.gY - 6
+            ) {
+              this.holeFallen = true;
+              this.setAnim("fall");
+              this.cameras.main.shake(300, 0.01);
+              this.tweens.add({
+                targets: this.player,
+                y: H + 100,
+                duration: 1100,
+                ease: "Cubic.In",
+              });
+              if (this.music)
+                this.tweens.add({
+                  targets: this.music,
+                  volume: 0,
+                  duration: 900,
+                });
+              this.time.delayedCall(700, () => {
+                this.cameras.main.flash(450, 255, 180, 80, false);
+              });
+              this.time.delayedCall(1300, () => {
+                this.cameras.main.fade(700, 0, 0, 0);
+                this.time.delayedCall(700, () => {
+                  this.scene.start("HeartChamberScene", { music: this.music });
+                });
+              });
             }
           }
 
@@ -4771,6 +4857,1069 @@
       }
 
       // ════════════════════════════════════════════════════════════════
+      // HEART CHAMBER SCENE — the climax. A vast dormant power station
+      // with three generators to restore before the Heart can beat again.
+      // ════════════════════════════════════════════════════════════════
+      class HeartChamberScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "HeartChamberScene" });
+        }
+
+        init(data) {
+          this.passedMusic = data && data.music;
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#05060c");
+          this.music = this.passedMusic;
+          this.worldW = 3600;
+          this.gY = 600;
+          this.pVY = 0;
+          this.gravity = 900;
+          this.onGround = true;
+          this.isLanding = false;
+          this.isDead = false;
+          this.isFrozen = false;
+          this.speed = 210;
+          this.curAnim = null;
+          this.respawnX = 80;
+          this.respawnY = this.gY;
+          this.eyePairs = [];
+
+          this.genA = { active: false, x: 520 };
+          this.genB = { active: false, x: 1320 };
+          this.genC = { active: false, x: 2120 };
+          this.genAPits = [];
+          this.genBZone = { x1: 1430, x2: 1640 };
+          this.genCZone = { x1: 2230, x2: 2460 };
+          this.gateX1 = 2720;
+          this.gateOpen = false;
+          this.heartX = 3260;
+          this.leverPulled = false;
+          this.allActive = false;
+
+          this.buildChamber();
+          this.buildGenerators();
+          this.buildHeartMachine();
+
+          this.createPlayer();
+
+          this.cameras.main.setBounds(0, 0, this.worldW, H);
+          this.cameras.main.startFollow(this.player, true, 0.06, 0.06);
+          this.cursors = this.input.keyboard.createCursorKeys();
+          this.wasd = this.input.keyboard.addKeys("W,A,S,D");
+          this.eKey = this.input.keyboard.addKey("E");
+
+          mkVignette(this, 175);
+          mkBars(this, 600);
+          this.grain = mkGrain(this, 560);
+
+          this.music = this.passedMusic;
+          if (this.music && this.music.isPlaying) {
+            this.tweens.add({
+              targets: this.music,
+              volume: 0.05,
+              duration: 2000,
+            });
+          }
+
+          this.cameras.main.fadeIn(2400);
+          this.time.delayedCall(2000, () =>
+            this.showText("Even sleeping hearts remember how to beat.", 3600),
+          );
+        }
+
+        // ── Background: machine cathedral ────────────────────────────
+        buildChamber() {
+          let bg = this.add.graphics();
+          bg.fillStyle(0x05060c, 1);
+          bg.fillRect(0, 0, this.worldW, H);
+
+          // Darkness swallowing the ceiling
+          let ceil = this.add.graphics().setDepth(0.5);
+          ceil.fillGradientStyle(
+            0x000000,
+            0x000000,
+            0x000000,
+            0x000000,
+            1,
+            1,
+            0,
+            0,
+          );
+          ceil.fillRect(0, 0, this.worldW, H * 0.55);
+
+          // Floor
+          let floorG = this.add.graphics().setDepth(1);
+          floorG.fillStyle(0x0a0c14, 1);
+          floorG.fillRect(0, this.gY, this.worldW, H - this.gY);
+          for (let x = 0; x < this.worldW; x += 140) {
+            this.add
+              .image(
+                x,
+                this.gY,
+                "ground_flat" + ((Math.floor(x / 140) % 10) + 1),
+              )
+              .setOrigin(0, 0)
+              .setDisplaySize(140, 140)
+              .setDepth(1)
+              .setTint(0x1a2230)
+              .setAlpha(0.7);
+          }
+
+          // Massive background gears, slowly rotating once awakened
+          this.bgGears = [];
+          [
+            { x: 350, y: 220, key: "gear_large", size: 320, spd: 0 },
+            { x: 1700, y: 180, key: "gear_medium", size: 220, spd: 0 },
+            { x: 2900, y: 240, key: "gear_large", size: 360, spd: 0 },
+          ].forEach((g) => {
+            let img = this.add
+              .image(g.x, g.y, g.key)
+              .setDisplaySize(g.size, g.size)
+              .setAlpha(0.22)
+              .setDepth(2)
+              .setTint(0x2a3344);
+            this.bgGears.push({ img, spd: g.spd });
+          });
+
+          // Rusted catwalks (fences as railings) and hanging chains
+          for (let x = 0; x < this.worldW; x += 460) {
+            this.add
+              .image(x, this.gY - 230, "fence2")
+              .setOrigin(0, 1)
+              .setDisplaySize(420, 50)
+              .setAlpha(0.3)
+              .setDepth(2)
+              .setTint(0x1c2430);
+          }
+          this.chainG = this.add.graphics().setDepth(2);
+          for (let x = 80; x < this.worldW; x += 260) {
+            this.chainG.lineStyle(2, 0x222a36, 0.5);
+            this.chainG.beginPath();
+            this.chainG.moveTo(x, 0);
+            this.chainG.lineTo(x, this.gY - 240 + Phaser.Math.Between(0, 80));
+            this.chainG.strokePath();
+          }
+
+          // Thick power cables strung across the chamber — dark until awakened
+          this.cableG = this.add.graphics().setDepth(3);
+          this.drawCables(0);
+
+          // Pipes + bolted beams for texture
+          [180, 900, 1900, 2600, 3400].forEach((x, i) => {
+            this.add
+              .image(x, this.gY, "pipe_vertical" + ((i % 4) + 1))
+              .setOrigin(0.5, 1)
+              .setDisplaySize(40, 180)
+              .setAlpha(0.6)
+              .setDepth(2)
+              .setTint(0x222a36);
+          });
+          [400, 1200, 2000, 2800].forEach((x) => {
+            this.add
+              .image(x, this.gY - 260, "beam_bolted1")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(220, 30)
+              .setAlpha(0.5)
+              .setDepth(2)
+              .setTint(0x222a36);
+          });
+
+          // Leaking pipes / dripping water — small animated drips
+          this.drips = [];
+          [260, 1050, 1850, 2650].forEach((x) => {
+            let g = this.add.graphics().setDepth(15);
+            this.drips.push({
+              g,
+              x,
+              y: this.gY - 200,
+              t: Phaser.Math.FloatBetween(0, 2),
+            });
+          });
+
+          // Flickering emergency lights — small red glows along the chamber
+          this.emergencyLights = [];
+          [150, 800, 1600, 2400, 3100].forEach((x) => {
+            let g = this.add.graphics().setDepth(14);
+            this.emergencyLights.push({
+              g,
+              x,
+              y: this.gY - 280,
+              phase: Phaser.Math.FloatBetween(0, 10),
+            });
+          });
+
+          // Ambient spark motes drifting in the dark
+          this.sparkMotes = [];
+          for (let i = 0; i < 18; i++) {
+            this.sparkMotes.push({
+              x: Phaser.Math.Between(0, this.worldW),
+              y: Phaser.Math.Between(this.gY - 320, this.gY - 20),
+              a: Phaser.Math.FloatBetween(0.05, 0.25),
+              spd: Phaser.Math.FloatBetween(5, 16),
+            });
+          }
+          this.moteG = this.add.graphics().setDepth(16);
+        }
+
+        drawCables(charge) {
+          this.cableG.clear();
+          let color = charge > 0 ? 0xd4780a : 0x161c28;
+          let alpha = charge > 0 ? 0.5 * charge : 0.6;
+          for (let i = 0; i < 4; i++) {
+            let y = this.gY - 300 + i * 26;
+            this.cableG.lineStyle(3, color, alpha);
+            this.cableG.beginPath();
+            let x = -50;
+            this.cableG.moveTo(x, y);
+            while (x < this.worldW + 50) {
+              x += 180;
+              let sag = Math.sin(x * 0.01 + i) * 8;
+              this.cableG.lineTo(x, y + sag);
+            }
+            this.cableG.strokePath();
+          }
+        }
+
+        // ── Three generator stations ──────────────────────────────────
+        buildGenerators() {
+          // ═══ GENERATOR A — restores visibility, reveals hidden gaps ═══
+          this.add
+            .image(this.genA.x, this.gY - 40, "panel_console1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(90, 110)
+            .setDepth(5);
+          this.add
+            .image(this.genA.x, this.gY - 150, "sign_warning_triangle")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(36, 36)
+            .setDepth(5);
+          this.genA.switchImg = this.add
+            .image(this.genA.x + 60, this.gY - 8, "switch_blue_off")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 64)
+            .setDepth(5);
+
+          // Hidden gap zone — looks like solid dark floor until activated
+          const GAP_START = 650;
+          const PILLAR_W = 95;
+          const GAP_W = 100;
+          this.genA.pillars = [];
+          this.genAPits = [];
+          let gx = GAP_START;
+          for (let n = 0; n < 3; n++) {
+            this.genA.pillars.push({
+              x1: gx,
+              x2: gx + PILLAR_W,
+              top: this.gY - 28,
+            });
+            gx += PILLAR_W;
+            if (n < 2) {
+              this.genAPits.push({ x1: gx, x2: gx + GAP_W });
+              gx += GAP_W;
+            }
+          }
+          this.genA.sectionEnd = gx;
+          // The middle pillar retracts on a cycle once active — forces a
+          // timed double-jump rather than a casual stroll across.
+          this.genA.flickerCycle = 0;
+          this.genA.flickerLen = 1700; // ms
+          this.genA.flickerOnFrac = 0.55; // fraction of cycle the middle pillar is solid
+
+          // Void beneath the gap section
+          let voidG = this.add.graphics().setDepth(1);
+          voidG.fillStyle(0x020308, 1);
+          voidG.fillRect(
+            GAP_START,
+            this.gY + 4,
+            gx - GAP_START,
+            H - this.gY - 2,
+          );
+
+          // Pillar tops — revealed (bright) once Generator A activates
+          this.genA.pillarImgs = this.genA.pillars.map((p) =>
+            this.add
+              .image(p.x1, p.top, "ground_flat3")
+              .setOrigin(0, 0)
+              .setDisplaySize(PILLAR_W, 32)
+              .setDepth(2)
+              .setAlpha(0.08),
+          );
+          this.genA.pillarBodyImgs = this.genA.pillars.map((p) =>
+            this.add
+              .image(p.x1, p.top, "block_plain2")
+              .setOrigin(0, 0)
+              .setDisplaySize(PILLAR_W, this.gY - p.top + 8)
+              .setDepth(2)
+              .setAlpha(0.08),
+          );
+
+          // Darkness overlay over the gap section — lifts on activation
+          this.genA.darkness = this.add.graphics().setDepth(25);
+          this.genA.darkness.fillStyle(0x000000, 0.92);
+          this.genA.darkness.fillRect(
+            GAP_START - 40,
+            0,
+            gx - GAP_START + 80,
+            H,
+          );
+
+          // ═══ GENERATOR B — insulation crossing ═══
+          this.add
+            .image(this.genB.x, this.gY - 40, "panel_console1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(90, 110)
+            .setDepth(5);
+          this.add
+            .image(this.genB.x, this.gY - 150, "sign_power")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(36, 36)
+            .setDepth(5);
+          this.genB.switchImg = this.add
+            .image(this.genB.x + 60, this.gY - 8, "switch_yellow_off")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 64)
+            .setDepth(5);
+
+          // Electrified strip — hazard tape framing
+          this.add
+            .image(this.genBZone.x1, this.gY - 30, "hazard_orange1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 60)
+            .setDepth(21);
+          this.add
+            .image(this.genBZone.x2, this.gY - 30, "hazard_orange1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 60)
+            .setFlipX(true)
+            .setDepth(21);
+          this.genB.arcG = this.add.graphics().setDepth(20);
+          this.genB.arcTimer = 0;
+          this.drawGenBArc();
+
+          // Insulated walkway — flashes in once activated, but the
+          // insulation only holds for a short window before decaying
+          // back to a live current.
+          this.genB.insul = this.add.graphics().setDepth(22).setAlpha(0);
+          this.genB.insul.fillStyle(0x2a2a2a, 1);
+          this.genB.insul.fillRoundedRect(
+            this.genBZone.x1 - 6,
+            this.gY - 12,
+            this.genBZone.x2 - this.genBZone.x1 + 12,
+            12,
+            2,
+          );
+          this.genB.safeWindow = 0; // ms remaining of safety after activation
+          this.genB.safeWindowTotal = 2200;
+
+          // ═══ GENERATOR C — timing relay ═══
+          this.add
+            .image(this.genC.x, this.gY - 40, "panel_console1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(90, 110)
+            .setDepth(5);
+          this.add
+            .image(this.genC.x, this.gY - 150, "sign_diamond")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(36, 36)
+            .setDepth(5);
+          this.genC.switchImg = this.add
+            .image(this.genC.x + 60, this.gY - 8, "switch_orange_warning")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 64)
+            .setDepth(5);
+
+          this.add
+            .image(this.genCZone.x1, this.gY - 30, "hazard_yellow1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 60)
+            .setDepth(21);
+          this.add
+            .image(this.genCZone.x2, this.gY - 30, "hazard_yellow1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(60, 60)
+            .setFlipX(true)
+            .setDepth(21);
+
+          this.genC.gateG = this.add.graphics().setDepth(20);
+          this.genC.cycle = 0; // 0..1, position in the pulse cycle
+          this.genC.cycleLen = 1700; // ms
+          this.genC.safeFrac = 0.62; // fraction of cycle that is safe
+          this.drawGenCGate(0);
+
+          // ═══ GATE before the Heart Machine — opens once all 3 active ═══
+          this.gateImg = this.add
+            .image(this.gateX1, this.gY, "panel_large1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(140, 280)
+            .setDepth(10)
+            .setTint(0x1a2230);
+          this.add
+            .image(this.gateX1, this.gY - 290, "sign_warning_triangle")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(40, 40)
+            .setDepth(11);
+        }
+
+        drawGenBArc() {
+          this.genB.arcG.clear();
+          if (this.genB.active) return;
+          this.genB.arcG.fillStyle(
+            0x3377ff,
+            Phaser.Math.FloatBetween(0.3, 0.7),
+          );
+          this.genB.arcG.fillRect(
+            this.genBZone.x1,
+            this.gY - 6,
+            this.genBZone.x2 - this.genBZone.x1,
+            8,
+          );
+          for (let i = 0; i < 4; i++) {
+            let sx = Phaser.Math.Between(
+              this.genBZone.x1 + 20,
+              this.genBZone.x2 - 20,
+            );
+            this.genB.arcG.fillStyle(0x88bbff, 0.18);
+            this.genB.arcG.fillCircle(sx, this.gY - 2, 16);
+          }
+        }
+
+        // Draws the timing gate — red when hazardous, green/clear when safe
+        drawGenCGate(t) {
+          this.genC.gateG.clear();
+          let frac = (t % this.genC.cycleLen) / this.genC.cycleLen;
+          let safe = frac < this.genC.safeFrac;
+          this.genC.safeNow = safe;
+          let w = this.genCZone.x2 - this.genCZone.x1;
+          if (!this.genC.active) {
+            this.genC.gateG.fillStyle(0xff3333, 0.35);
+            this.genC.gateG.fillRect(this.genCZone.x1, this.gY - 60, w, 60);
+            return;
+          }
+          if (safe) {
+            this.genC.gateG.fillStyle(0x33ff88, 0.12);
+            this.genC.gateG.fillRect(this.genCZone.x1, this.gY - 60, w, 60);
+          } else {
+            this.genC.gateG.fillStyle(0xff3333, 0.45);
+            this.genC.gateG.fillRect(this.genCZone.x1, this.gY - 60, w, 60);
+            // crackling arcs
+            for (let i = 0; i < 3; i++) {
+              let sx = Phaser.Math.Between(
+                this.genCZone.x1 + 10,
+                this.genCZone.x2 - 10,
+              );
+              this.genC.gateG.fillStyle(0xffaa33, 0.5);
+              this.genC.gateG.fillCircle(
+                sx,
+                this.gY - Phaser.Math.Between(10, 50),
+                4,
+              );
+            }
+          }
+        }
+
+        // ── The Heart Machine — dormant centerpiece ────────────────────
+        buildHeartMachine() {
+          let hx = this.heartX,
+            hy = this.gY - 130;
+
+          // Outer ring + body, drawn so it can be re-tinted/glowed on activation
+          this.heartG = this.add.graphics().setDepth(8);
+          this.heartGlowG = this.add.graphics().setDepth(7);
+          this.heartPulse = 0;
+          this.drawHeart(0);
+
+          // Large cables connecting the machine to the chamber's power grid
+          this.add
+            .image(hx - 140, this.gY, "pipe_vertical2")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(34, 220)
+            .setDepth(6)
+            .setTint(0x2a3344);
+          this.add
+            .image(hx + 140, this.gY, "pipe_vertical4")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(34, 220)
+            .setDepth(6)
+            .setTint(0x2a3344);
+
+          // Lever — appears interactable once the gate opens
+          this.leverImg = this.add
+            .image(hx - 60, this.gY - 4, "switch_green_off")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(64, 70)
+            .setDepth(9);
+          this.add
+            .image(hx - 60, this.gY - 80, "panel_orange1")
+            .setOrigin(0.5, 1)
+            .setDisplaySize(90, 100)
+            .setDepth(8)
+            .setAlpha(0.85);
+        }
+
+        drawHeart(charge) {
+          let hx = this.heartX,
+            hy = this.gY - 130;
+          let pulse = (Math.sin(this.heartPulse) + 1) / 2;
+
+          this.heartGlowG.clear();
+          let glowA = 0.04 + 0.22 * charge * (0.6 + 0.4 * pulse);
+          this.heartGlowG.fillStyle(0xd4780a, glowA);
+          this.heartGlowG.fillCircle(hx, hy, 230);
+          this.heartGlowG.fillStyle(0xe89030, glowA * 1.4);
+          this.heartGlowG.fillCircle(hx, hy, 140);
+
+          this.heartG.clear();
+          // Outer housing
+          this.heartG.fillStyle(0x1c222e, 1);
+          this.heartG.fillCircle(hx, hy, 150);
+          this.heartG.lineStyle(6, 0x33394a, 1);
+          this.heartG.strokeCircle(hx, hy, 150);
+          // Ribbed rings
+          this.heartG.lineStyle(3, 0x2a3140, 1);
+          this.heartG.strokeCircle(hx, hy, 120);
+          this.heartG.strokeCircle(hx, hy, 90);
+          // Core — glows orange once charged
+          let coreColor = charge > 0 ? 0xe89030 : 0x3a3f4c;
+          let coreA = charge > 0 ? 0.5 + 0.5 * pulse * charge : 1;
+          this.heartG.fillStyle(coreColor, coreA);
+          this.heartG.fillCircle(hx, hy, 55);
+          this.heartG.fillStyle(
+            0xffd080,
+            charge > 0 ? 0.3 + 0.5 * pulse * charge : 0,
+          );
+          this.heartG.fillCircle(hx, hy, 30);
+          // Radiating "vein" lines
+          for (let i = 0; i < 8; i++) {
+            let ang = (i / 8) * Math.PI * 2;
+            let x1 = hx + Math.cos(ang) * 60,
+              y1 = hy + Math.sin(ang) * 60;
+            let x2 = hx + Math.cos(ang) * 145,
+              y2 = hy + Math.sin(ang) * 145;
+            this.heartG.lineStyle(
+              2,
+              charge > 0 ? 0xc8701e : 0x2a3140,
+              charge > 0 ? 0.5 : 0.7,
+            );
+            this.heartG.beginPath();
+            this.heartG.moveTo(x1, y1);
+            this.heartG.lineTo(x2, y2);
+            this.heartG.strokePath();
+          }
+        }
+
+        createPlayer() {
+          this.player = this.add
+            .sprite(this.respawnX, this.gY, "stand")
+            .setDepth(60);
+          setPlayerAnim(this.player, this, "stand");
+        }
+
+        setAnim(name) {
+          setPlayerAnim(this.player, this, name);
+        }
+
+        // Queue-based caption system (mirrors CityScene)
+        showText(text, duration, callback) {
+          if (!this.textQueue) this.textQueue = [];
+          if (duration == null) duration = Math.max(2000, text.length * 65);
+          this.textQueue.push({ text, duration, callback });
+          if (!this.textActive) this._playNextText();
+        }
+
+        _playNextText() {
+          if (!this.textQueue || this.textQueue.length === 0) {
+            this.textActive = false;
+            return;
+          }
+          this.textActive = true;
+          let { text, duration, callback } = this.textQueue.shift();
+          let t = this.add
+            .text(W / 2, H - 29, text, {
+              fontFamily: "EB Garamond",
+              fontStyle: "italic",
+              fontSize: "19px",
+              color: "#ffffff",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(610)
+            .setAlpha(0);
+          this.tweens.add({
+            targets: t,
+            alpha: 1,
+            duration: 700,
+            onComplete: () => {
+              this.time.delayedCall(duration, () => {
+                this.tweens.add({
+                  targets: t,
+                  alpha: 0,
+                  duration: 620,
+                  onComplete: () => {
+                    t.destroy();
+                    if (callback) callback();
+                    this._playNextText();
+                  },
+                });
+              });
+            },
+          });
+        }
+
+        showPrompt(text) {
+          if (this.interactPrompt) this.interactPrompt.destroy();
+          let sx = this.player.x - this.cameras.main.scrollX;
+          let sy = this.player.y - PLAYER_H - 22;
+          this.interactPrompt = this.add
+            .text(sx, sy, text, {
+              fontFamily: "EB Garamond",
+              fontSize: "14px",
+              color: "#aabbcc",
+              backgroundColor: "#00000099",
+              padding: { x: 8, y: 4 },
+            })
+            .setOrigin(0.5)
+            .setDepth(320)
+            .setScrollFactor(0);
+        }
+
+        hidePrompt() {
+          if (this.interactPrompt) {
+            this.interactPrompt.destroy();
+            this.interactPrompt = null;
+          }
+        }
+
+        // Lightweight "failure" — brief flash + instant reset, no long death
+        // sequence. Per spec: pits/shocks should teach, not punish.
+        quickRespawn(message) {
+          if (this.isDead) return;
+          this.isDead = true;
+          this.isFrozen = true;
+          this.hidePrompt();
+          this.pVY = 0;
+          this.setAnim("stand");
+
+          // Shock flicker — sustained jolt while the player is stuck in the current
+          this.cameras.main.shake(2400, 0.01);
+          let shockG = this.add.graphics().setScrollFactor(0).setDepth(700);
+          let shockTimer = this.time.addEvent({
+            delay: 80,
+            repeat: 29, // ~2.4s of flickering
+            callback: () => {
+              shockG.clear();
+              shockG.fillStyle(0x88bbff, Phaser.Math.FloatBetween(0.08, 0.2));
+              shockG.fillRect(0, 0, W, H);
+            },
+          });
+
+          if (message) this.showText(message, 2200);
+
+          this.time.delayedCall(2600, () => {
+            shockG.destroy();
+            this.cameras.main.fade(500, 0, 0, 0);
+            this.time.delayedCall(500, () => {
+              this.scene.restart({ music: this.passedMusic });
+            });
+          });
+        }
+
+        groundYAt(px) {
+          // Generator A gap section
+          if (
+            px > this.genA.pillars[0].x1 - 10 &&
+            px < this.genA.sectionEnd + 10
+          ) {
+            for (let i = 0; i < this.genA.pillars.length; i++) {
+              let p = this.genA.pillars[i];
+              if (px > p.x1 && px < p.x2) {
+                if (i === 1 && this.genA.active) {
+                  let frac =
+                    (this.genA.flickerCycle % this.genA.flickerLen) /
+                    this.genA.flickerLen;
+                  if (frac >= this.genA.flickerOnFrac) return null; // retracted
+                }
+                return p.top;
+              }
+            }
+            for (let pit of this.genAPits) {
+              if (px > pit.x1 && px < pit.x2) return null;
+            }
+          }
+          return this.gY;
+        }
+
+        movePlayer(delta) {
+          if (this.isFrozen) return;
+          let dt = delta / 1000;
+          let px = this.player.x,
+            py = this.player.y;
+          let wasOnGround = this.onGround;
+
+          this.pVY += this.gravity * dt;
+          py += this.pVY * dt;
+
+          let groundY = this.groundYAt(px);
+
+          if (groundY !== null && py >= groundY) {
+            if (!wasOnGround && this.pVY > 200) {
+              this.isLanding = true;
+              this.setAnim("land");
+              this.player.once("animationcomplete", () => {
+                this.isLanding = false;
+              });
+            }
+            py = groundY;
+            this.pVY = 0;
+            this.onGround = true;
+          } else {
+            this.onGround = false;
+          }
+
+          let moving = false;
+          if (!this.isLanding) {
+            if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 25) {
+              px -= this.speed * dt;
+              this.player.setFlipX(true);
+              moving = true;
+            }
+            if (this.cursors.right.isDown || this.wasd.D.isDown) {
+              px += this.speed * dt;
+              this.player.setFlipX(false);
+              moving = true;
+            }
+            if (
+              (this.cursors.up.isDown ||
+                this.cursors.space.isDown ||
+                this.wasd.W.isDown) &&
+              this.onGround
+            ) {
+              this.pVY = -390;
+              this.setAnim("jump");
+            }
+          }
+
+          if (!this.isLanding) {
+            if (!this.onGround) {
+              this.setAnim(this.pVY < 0 ? "jump" : "fall");
+            } else if (moving) {
+              this.setAnim("run");
+            } else {
+              this.setAnim("stand");
+            }
+          }
+
+          // Falling through a Generator A pit
+          if (
+            px > this.genA.pillars[0].x1 - 10 &&
+            px < this.genA.sectionEnd + 10
+          ) {
+            this.genAPits.forEach((pit) => {
+              if (px > pit.x1 + 4 && px < pit.x2 - 4 && py >= this.gY - 8) {
+                this.quickRespawn("Careful — the ground here is unstable.");
+              }
+            });
+          }
+
+          // Generator B electrified zone — live unless within the safe window
+          if (
+            (!this.genB.active || this.genB.safeWindow <= 0) &&
+            px > this.genBZone.x1 + 4 &&
+            px < this.genBZone.x2 - 4 &&
+            py >= this.gY - 6
+          ) {
+            this.quickRespawn("The current bites.");
+          }
+
+          // Generator C timing gate
+          if (
+            this.genC.active &&
+            !this.genC.safeNow &&
+            px > this.genCZone.x1 + 4 &&
+            px < this.genCZone.x2 - 4 &&
+            py >= this.gY - 6
+          ) {
+            this.quickRespawn("Not yet — wait for the pulse to pass.");
+          }
+          if (
+            !this.genC.active &&
+            px > this.genCZone.x1 + 4 &&
+            px < this.genCZone.x2 - 4 &&
+            py >= this.gY - 6
+          ) {
+            this.quickRespawn("Not without power.");
+          }
+
+          this.player.x = px;
+          this.player.y = py;
+        }
+
+        // ── Generator activations ──────────────────────────────────────
+        solveGenA() {
+          this.genA.active = true;
+          this.genA.switchImg.setTexture("switch_blue_on");
+          this.cameras.main.flash(360, 255, 200, 100, false);
+          this.tweens.add({
+            targets: this.genA.darkness,
+            alpha: 0,
+            duration: 1200,
+          });
+          this.genA.pillarImgs.forEach((img) =>
+            this.tweens.add({ targets: img, alpha: 1, duration: 900 }),
+          );
+          this.genA.pillarBodyImgs.forEach((img) =>
+            this.tweens.add({ targets: img, alpha: 0.9, duration: 900 }),
+          );
+          this.showText("The lights remember the way.", 2400);
+          this.checkAllActive();
+        }
+
+        solveGenB() {
+          this.genB.active = true;
+          this.genB.completed = true;
+          this.genB.switchImg.setTexture("switch_yellow_on");
+          this.cameras.main.flash(360, 120, 180, 255, false);
+          this.genB.arcG.clear();
+          this.genB.safeWindow = this.genB.safeWindowTotal;
+          this.tweens.add({
+            targets: this.genB.insul,
+            alpha: 1,
+            duration: 400,
+          });
+          this.showText("Insulated — but not for long. Move!", 2200);
+          this.checkAllActive();
+        }
+
+        solveGenC() {
+          this.genC.active = true;
+          this.genC.switchImg.setTexture("switch_orange_warning");
+          this.cameras.main.flash(360, 255, 220, 120, false);
+          this.genC.cycleT = 0;
+          this.showText("Watch the rhythm. Move between pulses.", 2600);
+          this.checkAllActive();
+        }
+
+        checkAllActive() {
+          if (this.allActive) return;
+          if (this.genA.active && this.genB.completed && this.genC.active) {
+            this.allActive = true;
+            this.time.delayedCall(600, () => this.activateChamber());
+          }
+        }
+
+        // ── Final activation: chamber comes alive, gate opens ──────────
+        activateChamber() {
+          this.gateOpen = true;
+          this.drawCables(1);
+          this.cameras.main.shake(420, 0.012);
+          this.cameras.main.flash(500, 220, 200, 255, false);
+
+          this.tweens.add({
+            targets: this.gateImg,
+            x: this.gateImg.x - 160,
+            alpha: 0.15,
+            duration: 1100,
+            ease: "Power2",
+          });
+
+          this.bgGears.forEach((g, i) => {
+            g.spd = 0.3 + i * 0.15;
+          });
+
+          this.heartCharge = 1;
+
+          this.showText("Some lights were waiting for you.", 3200, () => {
+            this.time.delayedCall(800, () => {
+              this.showText("[E] near the lever — Restore Power.", 3200);
+            });
+          });
+        }
+
+        // ── The lever: silence, then the Heart beats ────────────────────
+        pullLever() {
+          if (this.leverPulled) return;
+          this.leverPulled = true;
+          this.hidePrompt();
+          this.leverImg.setTexture("switch_green_on");
+
+          // Silence
+          if (this.music) {
+            this.tweens.add({ targets: this.music, volume: 0, duration: 600 });
+          }
+
+          this.time.delayedCall(900, () => {
+            // THUMP 1
+            this.cameras.main.shake(260, 0.02);
+            this.cameras.main.flash(280, 255, 160, 60, false);
+            this.heartPulseStrength = 1;
+
+            this.time.delayedCall(650, () => {
+              // THUMP 2
+              this.cameras.main.shake(320, 0.026);
+              this.cameras.main.flash(380, 255, 190, 100, false);
+
+              this.time.delayedCall(500, () => {
+                // Lights spread outward, orchestral swell (volume ramp)
+                if (this.music) {
+                  this.tweens.add({
+                    targets: this.music,
+                    volume: 0.4,
+                    duration: 2200,
+                  });
+                }
+                this.emergencyLights.forEach((l) => (l.stable = true));
+                this.heartCharge = 1.6;
+
+                this.time.delayedCall(2600, () => {
+                  this.cameras.main.fade(2200, 0, 0, 0);
+                  this.time.delayedCall(2200, () => {
+                    if (this.music) this.music.stop();
+                    this.scene.start("EndingScene");
+                  });
+                });
+              });
+            });
+          });
+        }
+
+        checkInteract() {
+          let px = this.player.x;
+
+          this.nearGenA = !this.genA.active && Math.abs(px - this.genA.x) < 80;
+          this.nearGenB = !this.genB.active && Math.abs(px - this.genB.x) < 80;
+          this.nearGenC = !this.genC.active && Math.abs(px - this.genC.x) < 80;
+          this.nearLever =
+            this.gateOpen &&
+            !this.leverPulled &&
+            Math.abs(px - (this.heartX - 60)) < 80;
+
+          if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+            if (this.nearGenA) this.solveGenA();
+            else if (this.nearGenB) this.solveGenB();
+            else if (this.nearGenC) this.solveGenC();
+            else if (this.nearLever) this.pullLever();
+          }
+        }
+
+        updatePrompt() {
+          let px = this.player.x;
+          let sx = px - this.cameras.main.scrollX;
+          let sy = this.player.y - PLAYER_H - 22;
+
+          if (this.nearGenA) this.showPrompt("[E]  Activate Generator");
+          else if (this.nearGenB) this.showPrompt("[E]  Activate Generator");
+          else if (this.nearGenC) this.showPrompt("[E]  Activate Generator");
+          else if (this.nearLever) this.showPrompt("[E]  Restore Power");
+          else this.hidePrompt();
+
+          if (this.interactPrompt) {
+            this.interactPrompt.x = sx;
+            this.interactPrompt.y = sy;
+          }
+        }
+
+        update(time, delta) {
+          tickGrain(this.grain, delta);
+
+          // Animate background gears once awakened
+          this.bgGears.forEach((g) => {
+            if (g.spd) g.img.angle += g.spd * (delta / 16.6);
+          });
+
+          // Heart pulse + glow
+          this.heartPulse += delta * 0.0026;
+          if (this.heartCharge) this.drawHeart(this.heartCharge);
+
+          // Generator A flickering middle pillar
+          if (this.genA.active) {
+            this.genA.flickerCycle += delta;
+            let frac =
+              (this.genA.flickerCycle % this.genA.flickerLen) /
+              this.genA.flickerLen;
+            let solid = frac < this.genA.flickerOnFrac;
+            let alpha = solid ? 1 : 0.12;
+            this.genA.pillarImgs[1].setAlpha(alpha);
+            this.genA.pillarBodyImgs[1].setAlpha(solid ? 0.9 : 0.1);
+          }
+
+          // Generator C timing cycle
+          if (this.genC.active) {
+            this.genC.cycleT = (this.genC.cycleT || 0) + delta;
+          } else {
+            this.genC.cycleT = 0;
+          }
+          this.drawGenCGate(this.genC.cycleT);
+
+          // Generator B: countdown the safe window, then re-energize
+          if (this.genB.active && this.genB.safeWindow > 0) {
+            this.genB.safeWindow -= delta;
+            if (this.genB.safeWindow <= 600 && this.genB.safeWindow > 0) {
+              // warning flicker as the window closes
+              this.genB.insul.setAlpha(
+                0.4 + 0.6 * Math.abs(Math.sin(this.genB.safeWindow * 0.02)),
+              );
+            }
+            if (this.genB.safeWindow <= 0) {
+              this.genB.insul.setAlpha(0);
+              if (!this.gateOpen) {
+                this.genB.active = false; // re-energized — must reactivate
+                this.genB.switchImg.setTexture("switch_yellow_off");
+                this.showText("The current returns.", 1800);
+              }
+            }
+          }
+          if (!this.genB.active) {
+            this.genB.arcTimer += delta;
+            if (this.genB.arcTimer > 220) {
+              this.genB.arcTimer = 0;
+              this.drawGenBArc();
+            }
+          }
+
+          // Drips
+          this.drips.forEach((d) => {
+            d.t += delta * 0.001;
+            d.g.clear();
+            let dy = (d.t % 1) * 60;
+            d.g.fillStyle(0x4a6a88, 0.4);
+            d.g.fillCircle(d.x, d.y + dy, 2.5);
+          });
+
+          // Emergency lights flicker (stabilize after activation)
+          this.emergencyLights.forEach((l) => {
+            l.phase += delta * 0.004;
+            l.g.clear();
+            let a = l.stable
+              ? 0.5
+              : 0.15 + 0.25 * Math.max(0, Math.sin(l.phase * 3));
+            let color = l.stable ? 0xe8a030 : 0xcc3322;
+            l.g.fillStyle(color, a);
+            l.g.fillCircle(l.x, l.y, 10);
+            l.g.fillStyle(color, a * 0.3);
+            l.g.fillCircle(l.x, l.y, 28);
+          });
+
+          // Ambient spark motes drift
+          this.moteG.clear();
+          this.sparkMotes.forEach((m) => {
+            m.y -= (m.spd * delta) / 1000;
+            if (m.y < this.gY - 340) m.y = this.gY - 20;
+            this.moteG.fillStyle(0xffcc88, m.a);
+            this.moteG.fillCircle(m.x, m.y, 1.5);
+          });
+
+          this.movePlayer(delta);
+          if (!this.isFrozen) {
+            this.checkInteract();
+            this.updatePrompt();
+          } else {
+            this.hidePrompt();
+          }
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
       // ENDING SCENE
       // ════════════════════════════════════════════════════════════════
       class EndingScene extends Phaser.Scene {
@@ -4837,6 +5986,50 @@
             }
           });
 
+          // Fireflies gathering — a quiet sign of life returning
+          this.time.delayedCall(5200, () => {
+            if (!this.textures.exists("fireflies")) return;
+            for (let i = 0; i < 8; i++) {
+              let fx = Phaser.Math.Between(W * 0.55, W - 60);
+              let fy = Phaser.Math.Between(H - 260, H - 90);
+              let fly = this.add
+                .image(fx, fy, "fireflies")
+                .setDisplaySize(9, 5)
+                .setDepth(12)
+                .setAlpha(0);
+              this.tweens.add({
+                targets: fly,
+                alpha: { from: 0, to: Phaser.Math.FloatBetween(0.4, 0.9) },
+                duration: Phaser.Math.Between(900, 1800),
+                yoyo: true,
+                repeat: -1,
+                delay: Phaser.Math.Between(0, 2000),
+              });
+              this.tweens.add({
+                targets: fly,
+                x: fx + Phaser.Math.Between(-40, 40),
+                y: fy + Phaser.Math.Between(-30, 30),
+                duration: Phaser.Math.Between(4000, 7000),
+                yoyo: true,
+                repeat: -1,
+                ease: "Sine.InOut",
+              });
+            }
+          });
+
+          // The sleeping cat, returned — a small silhouette by the rooftop edge
+          this.time.delayedCall(5800, () => {
+            if (!this.textures.exists("cat")) return;
+            let cat = this.add
+              .sprite(W * 0.18, H - 70, "cat")
+              .setOrigin(0.5, 1)
+              .setDisplaySize(46, 46)
+              .setDepth(11)
+              .setAlpha(0);
+            cat.play("anim_cat_sleep");
+            this.tweens.add({ targets: cat, alpha: 0.85, duration: 1200 });
+          });
+
           this.time.delayedCall(3400, () => {
             let tg = this.add.graphics().setDepth(10);
             tg.fillStyle(0x1a1c2a, 1);
@@ -4861,16 +6054,26 @@
           this.grain = mkGrain(this, 500);
 
           this.time.delayedCall(1700, () =>
-            this.ft("The circuit is complete.", H / 2 - 38, "#4d6270", "20px"),
+            this.ft(
+              "Even sleeping hearts remember how to beat.",
+              H / 2 - 38,
+              "#4d6270",
+              "20px",
+            ),
           );
           this.time.delayedCall(4400, () =>
-            this.ft("The city remembers you.", H / 2 + 8, "#5d7280", "22px"),
+            this.ft(
+              "Some lights were waiting for you.",
+              H / 2 + 8,
+              "#5d7280",
+              "22px",
+            ),
           );
           this.time.delayedCall(7400, () =>
-            this.ft("To be continued...", H / 2 + 65, "#c8a050", "30px"),
+            this.ft("The city remembered.", H / 2 + 65, "#c8a050", "30px"),
           );
 
-          this.time.delayedCall(10800, () => {
+          this.time.delayedCall(12000, () => {
             let dark = this.add
               .rectangle(W / 2, H / 2, W, H, 0x000000)
               .setAlpha(0)
@@ -4903,7 +6106,7 @@
                     f: "EB Garamond",
                   },
                   {
-                    t: "[ SPACE ] Play Again",
+                    t: "[ SPACE ] Continue",
                     y: H / 2 + 112,
                     s: "14px",
                     c: "#2d3d48",
@@ -4930,7 +6133,7 @@
                 this.input.keyboard.once("keydown-SPACE", () => {
                   this.cameras.main.fade(1100, 0, 0, 0);
                   this.time.delayedCall(1100, () =>
-                    this.scene.start("TitleScene"),
+                    this.scene.start("SummaryScene"),
                   );
                 });
               },
@@ -4959,6 +6162,139 @@
       }
 
       // ════════════════════════════════════════════════════════════════
+      // SUMMARY SCENE — a quiet reflection on what was learned
+      // ════════════════════════════════════════════════════════════════
+      class SummaryScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "SummaryScene" });
+        }
+
+        create() {
+          this.cameras.main.setBackgroundColor("#05060c");
+          this.cameras.main.fadeIn(1400);
+
+          this.grain = mkGrain(this, 5);
+
+          this.add
+            .text(W / 2, 78, "What You Learned", {
+              fontFamily: "Cinzel",
+              fontSize: "34px",
+              color: "#c8a050",
+            })
+            .setOrigin(0.5)
+            .setDepth(10)
+            .setAlpha(0)
+            .setData("fadeTarget", true);
+
+          let title = this.children.list[this.children.list.length - 1];
+          this.tweens.add({ targets: title, alpha: 1, duration: 1200 });
+
+          const lessons = [
+            {
+              concept: "Circuits & Conductivity",
+              detail:
+                "Learned by finding the broken fuse box, then the metal rod — and connecting the two to restore power.",
+            },
+            {
+              concept: "Hidden Paths",
+              detail:
+                "Learned by lighting the dark — once power returned, the ground that seemed solid revealed its true gaps.",
+            },
+            {
+              concept: "Insulation",
+              detail:
+                "Learned at the pond — rubber held against the water, while metal and wood gave way beneath it.",
+            },
+            {
+              concept: "Timing",
+              detail:
+                "Learned deep in the chamber — crossing the pulse gate meant moving the instant the danger passed, not before.",
+            },
+            {
+              concept: "Restoring Power",
+              detail:
+                "Learned at the Heart of the City — every small repair led to one final act: pulling the lever that woke it all.",
+            },
+          ];
+
+          const startY = 160;
+          const rowH = 92;
+
+          lessons.forEach((lesson, i) => {
+            let y = startY + i * rowH;
+
+            let card = this.add.graphics().setDepth(9).setAlpha(0);
+            card.fillStyle(0x10141c, 0.9);
+            card.fillRoundedRect(W / 2 - 420, y - 30, 840, 76, 8);
+            card.lineStyle(1.5, 0x3a4a60, 0.7);
+            card.strokeRoundedRect(W / 2 - 420, y - 30, 840, 76, 8);
+
+            let conceptText = this.add
+              .text(W / 2 - 390, y - 4, lesson.concept, {
+                fontFamily: "Cinzel",
+                fontSize: "19px",
+                color: "#e8c878",
+              })
+              .setOrigin(0, 0.5)
+              .setDepth(10)
+              .setAlpha(0);
+
+            let detailText = this.add
+              .text(W / 2 - 390, y + 20, lesson.detail, {
+                fontFamily: "EB Garamond",
+                fontStyle: "italic",
+                fontSize: "15px",
+                color: "#aabbcc",
+                wordWrap: { width: 780 },
+              })
+              .setOrigin(0, 0.5)
+              .setDepth(10)
+              .setAlpha(0);
+
+            this.tweens.add({
+              targets: [card, conceptText, detailText],
+              alpha: 1,
+              duration: 900,
+              delay: 600 + i * 320,
+            });
+          });
+
+          let prompt = this.add
+            .text(W / 2, H - 50, "[ SPACE ] Play Again", {
+              fontFamily: "EB Garamond",
+              fontSize: "15px",
+              color: "#5d7280",
+            })
+            .setOrigin(0.5)
+            .setDepth(10)
+            .setAlpha(0);
+          this.tweens.add({
+            targets: prompt,
+            alpha: 1,
+            duration: 1000,
+            delay: 600 + lessons.length * 320 + 400,
+          });
+          this.tweens.add({
+            targets: prompt,
+            alpha: { from: 0.5, to: 1 },
+            duration: 1000,
+            yoyo: true,
+            repeat: -1,
+            delay: 600 + lessons.length * 320 + 1400,
+          });
+
+          this.input.keyboard.once("keydown-SPACE", () => {
+            this.cameras.main.fade(1100, 0, 0, 0);
+            this.time.delayedCall(1100, () => this.scene.start("TitleScene"));
+          });
+        }
+
+        update(time, delta) {
+          tickGrain(this.grain, delta);
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════
       // BOOT
       // ════════════════════════════════════════════════════════════════
       window.game = new Phaser.Game({
@@ -4977,7 +6313,9 @@
           TunnelScene,
           FallScene,
           CityScene,
+          HeartChamberScene,
           EndingScene,
+          SummaryScene,
         ],
       });
     </script>
