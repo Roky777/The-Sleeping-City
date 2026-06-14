@@ -233,10 +233,31 @@
         );
       }
 
-      function sendKey(type, code) {
-        window.dispatchEvent(
-          new KeyboardEvent(type, { code, key: code, bubbles: true }),
-        );
+      // Touch buttons set plain boolean flags on scene.touchState; scenes
+      // OR these into their existing input checks. Far more reliable on
+      // mobile than synthetic KeyboardEvents or Phaser Key internals.
+      function pressKey(scene, code, isDown) {
+        if (!scene.touchState) scene.touchState = {};
+        let key = code.replace("Arrow", "").replace("Key", "");
+        // key is now one of: Left, Right, Up, Down, E, F
+        scene.touchState[key] = isDown;
+        if (isDown) {
+          if (!scene.touchState._justDown) scene.touchState._justDown = {};
+          scene.touchState._justDown[key] = true;
+        }
+      }
+
+      // Consumes and clears a "just pressed" flag for E/F-style buttons
+      function touchJustDown(scene, key) {
+        if (
+          scene.touchState &&
+          scene.touchState._justDown &&
+          scene.touchState._justDown[key]
+        ) {
+          scene.touchState._justDown[key] = false;
+          return true;
+        }
+        return false;
       }
 
       // `actionLabel` may be a string (static) — lets scenes show "E" vs "F"
@@ -246,11 +267,14 @@
 
         const mkBtn = (x, y, r, label, codeDown, codeUp) => {
           let g = scene.add
-            .circle(x, y, r, 0xffffff, 0.08)
+            .circle(x, y, r, 0xffffff, 0.14)
             .setScrollFactor(0)
             .setDepth(900)
-            .setStrokeStyle(2, 0xffffff, 0.25)
-            .setInteractive();
+            .setStrokeStyle(2, 0xffffff, 0.4)
+            .setInteractive(
+              new Phaser.Geom.Circle(r, r, r),
+              Phaser.Geom.Circle.Contains,
+            );
           let t = scene.add
             .text(x, y, label, {
               fontFamily: "EB Garamond",
@@ -260,15 +284,15 @@
             .setOrigin(0.5)
             .setScrollFactor(0)
             .setDepth(901)
-            .setAlpha(0.7);
+            .setAlpha(0.9);
 
           g.on("pointerdown", () => {
             g.setFillStyle(0xffffff, 0.22);
-            sendKey("keydown", codeDown);
+            pressKey(scene, codeDown, true);
           });
           const release = () => {
-            g.setFillStyle(0xffffff, 0.08);
-            sendKey("keyup", codeUp || codeDown);
+            g.setFillStyle(0xffffff, 0.14);
+            pressKey(scene, codeUp || codeDown, false);
           };
           g.on("pointerup", release);
           g.on("pointerout", release);
@@ -288,11 +312,11 @@
           actionBtn.g.removeAllListeners();
           actionBtn.g.on("pointerdown", () => {
             actionBtn.g.setFillStyle(0xffffff, 0.22);
-            sendKey("keydown", code);
+            pressKey(scene, code, true);
           });
           const release = () => {
-            actionBtn.g.setFillStyle(0xffffff, 0.08);
-            sendKey("keyup", code);
+            actionBtn.g.setFillStyle(0xffffff, 0.14);
+            pressKey(scene, code, false);
           };
           actionBtn.g.on("pointerup", release);
           actionBtn.g.on("pointerout", release);
@@ -1256,7 +1280,7 @@
                 )
                 .setDepth(5)
                 .setTint(0x4a5068)
-                .setAlpha(0.7);
+                .setAlpha(0.9);
             }
           }
 
@@ -1714,7 +1738,10 @@
               this.puzzlePrompt.x = px - this.cameras.main.scrollX;
               this.puzzlePrompt.y = py - PLAYER_H - 22;
             }
-            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+            if (
+              Phaser.Input.Keyboard.JustDown(this.eKey) ||
+              touchJustDown(this, "E")
+            ) {
               this.collected[key] = true;
               this.collectedCount++;
               if (
@@ -2237,7 +2264,7 @@
                 this.checkPuzzleSolved(targets, key);
               });
               zone.on("pointerover", () => {
-                g.setAlpha(0.7);
+                g.setAlpha(0.9);
               });
               zone.on("pointerout", () => {
                 g.setAlpha(1);
@@ -3009,18 +3036,28 @@
           } else this.onGround = false;
 
           let moving = false;
-          if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 30) {
+          if (
+            (this.cursors.left.isDown ||
+              this.wasd.A.isDown ||
+              (this.touchState && this.touchState.Left)) &&
+            px > 30
+          ) {
             px -= this.speed * dt;
             this.player.setFlipX(true);
             moving = true;
           }
-          if (this.cursors.right.isDown || this.wasd.D.isDown) {
+          if (
+            this.cursors.right.isDown ||
+            this.wasd.D.isDown ||
+            (this.touchState && this.touchState.Right)
+          ) {
             px += this.speed * dt;
             this.player.setFlipX(false);
             moving = true;
           }
           if (
             (this.cursors.up.isDown ||
+              (this.touchState && this.touchState.Up) ||
               this.cursors.space.isDown ||
               this.wasd.W.isDown) &&
             this.onGround
@@ -3156,7 +3193,8 @@
               this.puzzlePrompt.y = py - PLAYER_H - 22;
             }
             if (
-              Phaser.Input.Keyboard.JustDown(this.eKey) &&
+              (Phaser.Input.Keyboard.JustDown(this.eKey) ||
+                touchJustDown(this, "E")) &&
               !this.mousePuzzleOpen
             ) {
               this.openMousePuzzle();
@@ -3175,7 +3213,10 @@
               this.puzzlePrompt.y = py - PLAYER_H - 22;
             }
 
-            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+            if (
+              Phaser.Input.Keyboard.JustDown(this.eKey) ||
+              touchJustDown(this, "E")
+            ) {
               this.catWakeAttempts++;
 
               // Small reaction
@@ -3206,7 +3247,10 @@
               this.puzzlePrompt.x = px - this.cameras.main.scrollX;
               this.puzzlePrompt.y = py - PLAYER_H - 22;
             }
-            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+            if (
+              Phaser.Input.Keyboard.JustDown(this.eKey) ||
+              touchJustDown(this, "E")
+            ) {
               this.openPuzzle();
             }
           } else {
@@ -3939,7 +3983,7 @@
             .setOrigin(0.5, 1)
             .setDisplaySize(70, 70)
             .setDepth(4)
-            .setAlpha(0.7);
+            .setAlpha(0.9);
           this.add
             .image(3500, this.gY - 30, "sign_diamond")
             .setOrigin(0.5, 1)
@@ -4661,12 +4705,20 @@
               // Rafting: drift steadily toward the far bank; left/right nudges speed
               let driftSpeed = 70; // px/sec base drift
               let nudge = 0;
-              if (this.cursors.left.isDown || this.wasd.A.isDown) {
+              if (
+                this.cursors.left.isDown ||
+                this.wasd.A.isDown ||
+                (this.touchState && this.touchState.Left)
+              ) {
                 nudge = -40;
                 this.player.setFlipX(true);
                 moving = true;
               }
-              if (this.cursors.right.isDown || this.wasd.D.isDown) {
+              if (
+                this.cursors.right.isDown ||
+                this.wasd.D.isDown ||
+                (this.touchState && this.touchState.Right)
+              ) {
                 nudge = 40;
                 this.player.setFlipX(false);
                 moving = true;
@@ -4674,18 +4726,28 @@
               px += (driftSpeed + nudge) * dt;
               px = Phaser.Math.Clamp(px, this.pondX1 + 5, this.pondX2 - 5);
             } else {
-              if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 25) {
+              if (
+                (this.cursors.left.isDown ||
+                  this.wasd.A.isDown ||
+                  (this.touchState && this.touchState.Left)) &&
+                px > 25
+              ) {
                 px -= this.speed * dt;
                 this.player.setFlipX(true);
                 moving = true;
               }
-              if (this.cursors.right.isDown || this.wasd.D.isDown) {
+              if (
+                this.cursors.right.isDown ||
+                this.wasd.D.isDown ||
+                (this.touchState && this.touchState.Right)
+              ) {
                 px += this.speed * dt;
                 this.player.setFlipX(false);
                 moving = true;
               }
               if (
                 (this.cursors.up.isDown ||
+                  (this.touchState && this.touchState.Up) ||
                   this.cursors.space.isDown ||
                   this.wasd.W.isDown) &&
                 this.onGround
@@ -4804,7 +4866,10 @@
             Math.abs(px - (this.rodX + 40)) < 80
           ) {
             this.nearRod = true;
-            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+            if (
+              Phaser.Input.Keyboard.JustDown(this.eKey) ||
+              touchJustDown(this, "E")
+            ) {
               this.rodCollected = true;
               this.hasRod = true;
               this.rodG.setVisible(false);
@@ -4817,7 +4882,10 @@
 
           if (!this.p1Solved && Math.abs(px - this.fuseBoxX) < 80) {
             this.nearFuseBox = true;
-            if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+            if (
+              Phaser.Input.Keyboard.JustDown(this.eKey) ||
+              touchJustDown(this, "E")
+            ) {
               if (this.hasRod) {
                 this.solvePuzzle1();
               } else {
@@ -4842,7 +4910,10 @@
             if (this.plates[type]) return;
             if (Math.abs(px - def.x) < 60) {
               this.nearPlate = type;
-              if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              if (
+                Phaser.Input.Keyboard.JustDown(this.eKey) ||
+                touchJustDown(this, "E")
+              ) {
                 this.plates[type] = true;
                 this.plateIcons[type].setVisible(false);
                 this.tweens.killTweensOf(this.plateIcons[type]);
@@ -4868,7 +4939,10 @@
                   3200,
                 );
               }
-              if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+              if (
+                Phaser.Input.Keyboard.JustDown(this.eKey) ||
+                touchJustDown(this, "E")
+              ) {
                 // cycle to the next plate the player actually has
                 if (!this.plateSelected) {
                   this.plateSelected = true;
@@ -4885,7 +4959,8 @@
               }
               if (
                 this.plateSelected &&
-                Phaser.Input.Keyboard.JustDown(this.fKey)
+                (Phaser.Input.Keyboard.JustDown(this.fKey) ||
+                  touchJustDown(this, "F"))
               ) {
                 let type = this.plateOrder[this.plateSelectIndex];
                 if (this.plates[type]) this.placePlate(type);
@@ -5091,7 +5166,7 @@
               .setDisplaySize(140, 140)
               .setDepth(1)
               .setTint(0x1a2230)
-              .setAlpha(0.7);
+              .setAlpha(0.9);
           }
 
           // Massive background gears, slowly rotating once awakened
@@ -5706,18 +5781,28 @@
 
           let moving = false;
           if (!this.isLanding) {
-            if ((this.cursors.left.isDown || this.wasd.A.isDown) && px > 25) {
+            if (
+              (this.cursors.left.isDown ||
+                this.wasd.A.isDown ||
+                (this.touchState && this.touchState.Left)) &&
+              px > 25
+            ) {
               px -= this.speed * dt;
               this.player.setFlipX(true);
               moving = true;
             }
-            if (this.cursors.right.isDown || this.wasd.D.isDown) {
+            if (
+              this.cursors.right.isDown ||
+              this.wasd.D.isDown ||
+              (this.touchState && this.touchState.Right)
+            ) {
               px += this.speed * dt;
               this.player.setFlipX(false);
               moving = true;
             }
             if (
               (this.cursors.up.isDown ||
+                (this.touchState && this.touchState.Up) ||
                 this.cursors.space.isDown ||
                 this.wasd.W.isDown) &&
               this.onGround
@@ -5921,7 +6006,10 @@
             !this.leverPulled &&
             Math.abs(px - (this.heartX - 60)) < 80;
 
-          if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+          if (
+            Phaser.Input.Keyboard.JustDown(this.eKey) ||
+            touchJustDown(this, "E")
+          ) {
             if (this.nearGenA) this.solveGenA();
             else if (this.nearGenB) this.solveGenB();
             else if (this.nearGenC) this.solveGenC();
@@ -6429,6 +6517,9 @@
         width: W,
         height: H,
         backgroundColor: "#000000",
+        input: {
+          activePointers: 3,
+        },
         scale: {
           mode: Phaser.Scale.FIT,
           autoCenter: Phaser.Scale.CENTER_BOTH,
