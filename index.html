@@ -2,16 +2,58 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>The Sleeping City</title>
     <link rel="icon" href="data:," />
     <link
       href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=EB+Garamond:ital@0;1&display=swap"
       rel="stylesheet" />
-
-    <link rel="stylesheet" href="./app.css" />
-    <style></style>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #000;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+        touch-action: none;
+      }
+      canvas {
+        display: block;
+      }
+      #rotate-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: #000;
+        color: #c8a050;
+        font-family: "EB Garamond", serif;
+        font-style: italic;
+        font-size: 18px;
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 40px;
+      }
+      @media (max-aspect-ratio: 1/1) {
+        #rotate-overlay {
+          display: flex;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="rotate-overlay">
+      Rotate your device to landscape to play The Sleeping City.
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
 
     <script>
@@ -176,6 +218,101 @@
         b.fillStyle(0x000000, 1);
         b.fillRect(0, 0, W, 58);
         b.fillRect(0, H - 58, W, 58);
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // TOUCH CONTROLS — on-screen buttons for touch devices. Dispatches
+      // synthetic keyboard events so existing cursors/addKey logic in every
+      // scene works unchanged (ArrowLeft/Right/Up, E, F).
+      // ════════════════════════════════════════════════════════════════
+      function isTouchDevice() {
+        return (
+          "ontouchstart" in window ||
+          navigator.maxTouchPoints > 0 ||
+          (window.matchMedia && window.matchMedia("(pointer: coarse)").matches)
+        );
+      }
+
+      function sendKey(type, code) {
+        window.dispatchEvent(
+          new KeyboardEvent(type, { code, key: code, bubbles: true }),
+        );
+      }
+
+      // `actionLabel` may be a string (static) — lets scenes show "E" vs "F"
+      // via setAction() called from update() for contextual buttons.
+      function mkTouchControls(scene, actionLabel) {
+        if (!isTouchDevice()) return null;
+
+        const mkBtn = (x, y, r, label, codeDown, codeUp) => {
+          let g = scene.add
+            .circle(x, y, r, 0xffffff, 0.08)
+            .setScrollFactor(0)
+            .setDepth(900)
+            .setStrokeStyle(2, 0xffffff, 0.25)
+            .setInteractive();
+          let t = scene.add
+            .text(x, y, label, {
+              fontFamily: "EB Garamond",
+              fontSize: "22px",
+              color: "#ffffff",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(901)
+            .setAlpha(0.7);
+
+          g.on("pointerdown", () => {
+            g.setFillStyle(0xffffff, 0.22);
+            sendKey("keydown", codeDown);
+          });
+          const release = () => {
+            g.setFillStyle(0xffffff, 0.08);
+            sendKey("keyup", codeUp || codeDown);
+          };
+          g.on("pointerup", release);
+          g.on("pointerout", release);
+
+          return { g, t };
+        };
+
+        const R = 38;
+        const leftBtn = mkBtn(70, H - 90, R, "◀", "ArrowLeft");
+        const rightBtn = mkBtn(160, H - 90, R, "▶", "ArrowRight");
+        const jumpBtn = mkBtn(W - 70, H - 160, R, "▲", "ArrowUp");
+        const actionBtn = mkBtn(W - 160, H - 90, R + 6, "E", "KeyE");
+
+        // Allow scenes to relabel/retarget the action button contextually
+        const setAction = (label, code) => {
+          actionBtn.t.setText(label);
+          actionBtn.g.removeAllListeners();
+          actionBtn.g.on("pointerdown", () => {
+            actionBtn.g.setFillStyle(0xffffff, 0.22);
+            sendKey("keydown", code);
+          });
+          const release = () => {
+            actionBtn.g.setFillStyle(0xffffff, 0.08);
+            sendKey("keyup", code);
+          };
+          actionBtn.g.on("pointerup", release);
+          actionBtn.g.on("pointerout", release);
+        };
+
+        if (typeof actionLabel === "string") setAction(actionLabel, "KeyE");
+
+        return {
+          leftBtn,
+          rightBtn,
+          jumpBtn,
+          actionBtn,
+          setAction,
+          destroy() {
+            [leftBtn, rightBtn, jumpBtn, actionBtn].forEach(({ g, t }) => {
+              g.destroy();
+              t.destroy();
+            });
+          },
+        };
       }
 
       // ════════════════════════════════════════════════════════════════
@@ -734,6 +871,7 @@
           mkVignette(this, 180);
           mkBars(this, 600);
           this.grain = mkGrain(this, 550);
+          this.touch = mkTouchControls(this, "E");
 
           this.cameras.main.fadeIn(2500);
 
@@ -3376,6 +3514,7 @@
           mkVignette(this, 175);
           mkBars(this, 600);
           this.grain = mkGrain(this, 560);
+          this.touch = mkTouchControls(this, "E");
 
           this.createPlayer();
 
@@ -4440,6 +4579,17 @@
           this.movePlayer(delta);
           this.checkInteract();
           this.updatePrompt();
+
+          // Touch: switch the action button to "F" (place plate) when at
+          // the pond with a plate selected; otherwise it's "E" (interact).
+          if (this.touch) {
+            let wantF = this.nearPond && this.plateSelected;
+            if (wantF !== this._touchIsF) {
+              this._touchIsF = wantF;
+              if (wantF) this.touch.setAction("F", "KeyF");
+              else this.touch.setAction("E", "KeyE");
+            }
+          }
         }
 
         // Returns the ground surface Y at a given x, accounting for the
@@ -4889,6 +5039,7 @@
           mkVignette(this, 175);
           mkBars(this, 600);
           this.grain = mkGrain(this, 560);
+          this.touch = mkTouchControls(this, "E");
 
           this.music = this.passedMusic;
           if (this.music && this.music.isPlaying) {
