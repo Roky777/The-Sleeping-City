@@ -3,9 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <title>The Sleeping City</title>
+    <link rel="icon" href="data:," />
     <link
       href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=EB+Garamond:ital@0;1&display=swap"
       rel="stylesheet" />
+
     <link rel="stylesheet" href="./app.css" />
     <style></style>
   </head>
@@ -301,13 +303,6 @@
           });
           this.load.image("fireflies", "assets/particles/fireflies.png");
 
-          // ── Skies ──
-          this.load.image(
-            "skyNightSunset",
-            "assets/background/city/sky_night.png",
-          );
-          this.load.image("skyStorm", "assets/background/city/sky_storm.png");
-
           // ── INDUSTRIAL TILESET (CityScene) ──
           [
             "arrow_down",
@@ -418,10 +413,6 @@
           this.load.audio("thunderSfx", "assets/audio/sfx/thunder.wav");
           this.load.audio("windHowl", "assets/audio/sfx/wind_howl.wav");
           this.load.audio("windRushing", "assets/audio/sfx/wind_rushing.wav");
-          this.load.audio(
-            "catFootsteps",
-            "assets/audio/sfx/run-away-footstep.wav",
-          );
 
           this.load.on("loaderror", (file) => {
             console.warn("Failed to load:", file.key, file.src);
@@ -897,18 +888,6 @@
           let base = this.add.graphics();
           base.fillStyle(0x0a0c16, 1);
           base.fillRect(0, 0, this.worldW, H);
-
-          if (this.textures.exists("skyStorm")) {
-            for (let i = 0; i < Math.ceil(this.worldW / 576) + 1; i++) {
-              this.add
-                .image(i * 576, 0, "skyStorm")
-                .setOrigin(0, 0)
-                .setDisplaySize(580, 360)
-                .setScrollFactor(0.04)
-                .setAlpha(0.85)
-                .setTint(0x8899bb);
-            }
-          }
 
           this.time.addEvent({
             delay: Phaser.Math.Between(9000, 18000),
@@ -2847,9 +2826,6 @@
           this.cat.setTexture("runningcat", 0);
           this.cat.setDisplaySize(80, 56);
           this.cat.play("anim_cat_run");
-          if (this.cache.audio.exists("catFootsteps")) {
-            this.sound.play("catFootsteps", { volume: 0.4 });
-          }
           let runDuration = Math.abs(targetX - this.cat.x) * 6.0;
           this.tweens.add({
             targets: this.cat,
