@@ -340,6 +340,91 @@
       }
 
       // ════════════════════════════════════════════════════════════════
+      // HINT SYSTEM — a gentle nudge when the player seems stuck.
+      // If the player hasn't moved for `delay` ms, a small arrow fades in
+      // above them pointing toward the next objective. Any movement hides
+      // it again. Scenes opt in by calling mkHints() in create() and
+      // tickHints() each update(); `getTarget()` returns the world-space
+      // {x, y} the player should head toward.
+      // ════════════════════════════════════════════════════════════════
+      function mkHints(scene, opts) {
+        return {
+          getTarget: opts.getTarget,
+          delay: opts.delay || 12000,
+          idle: 0,
+          lastX: null,
+          lastY: null,
+          arrow: null,
+        };
+      }
+
+      function hintClearArrow(h) {
+        if (h.arrow) {
+          h.arrow.destroy();
+          h.arrow = null;
+        }
+      }
+
+      function tickHints(scene, h, delta) {
+        let p = scene.player;
+        // Skip while there's no controllable player, or during cutscene
+        // freezes / death resets where a hint would be noise.
+        if (!p || scene.isFrozen || scene.isDead) {
+          h.idle = 0;
+          hintClearArrow(h);
+          h.lastX = p ? p.x : null;
+          h.lastY = p ? p.y : null;
+          return;
+        }
+
+        // Did the player move (or try to) since the last frame?
+        let moved =
+          h.lastX == null ||
+          Math.abs(p.x - h.lastX) > 2 ||
+          Math.abs(p.y - h.lastY) > 2;
+        h.lastX = p.x;
+        h.lastY = p.y;
+
+        if (moved) {
+          h.idle = 0;
+          hintClearArrow(h);
+          return;
+        }
+
+        h.idle += delta;
+        if (h.idle < h.delay) return;
+
+        let tgt = h.getTarget ? h.getTarget() : null;
+        if (!tgt) return;
+
+        let ang = Math.atan2(tgt.y - p.y, tgt.x - p.x);
+        if (!h.arrow) {
+          h.arrow = scene.add
+            .text(0, 0, "➤", {
+              fontFamily: "EB Garamond",
+              fontSize: "28px",
+              color: "#d4780a",
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0)
+            .setDepth(616)
+            .setAlpha(0);
+          scene.tweens.add({
+            targets: h.arrow,
+            alpha: 0.75,
+            duration: 700,
+            yoyo: true,
+            repeat: -1,
+          });
+        }
+        // Hover the arrow just above the player, aimed at the objective.
+        let cam = scene.cameras.main;
+        h.arrow.setRotation(ang);
+        h.arrow.x = p.x - cam.scrollX + Math.cos(ang) * 44;
+        h.arrow.y = p.y - PLAYER_H - 36 + Math.sin(ang) * 26;
+      }
+
+      // ════════════════════════════════════════════════════════════════
       // PRELOAD
       // ════════════════════════════════════════════════════════════════
       class PreloadScene extends Phaser.Scene {
@@ -896,6 +981,11 @@
           mkBars(this, 600);
           this.grain = mkGrain(this, 550);
           this.touch = mkTouchControls(this, "E");
+
+          // Nudge toward the way down (the hole) if the player stalls.
+          this.hints = mkHints(this, {
+            getTarget: () => ({ x: this.holeX, y: this.gY }),
+          });
 
           this.cameras.main.fadeIn(2500);
 
@@ -3002,7 +3092,15 @@
               this.cat.setTexture("cat", 0);
               this.cat.setDisplaySize(56, 56);
               this.cat.play("anim_cat_sleep");
-              this.showHint("The tree stirs. Something has changed.");
+              this.showHint("The tree stirs. Something has changed.", 2800);
+              this.showHint(
+                "That cat... there's something strange about it.",
+                3000,
+              );
+              this.showHint(
+                "The circuit here is broken — I should fix it to open the door.",
+                3600,
+              );
             },
           });
         }
@@ -3014,6 +3112,7 @@
         update(time, delta) {
           tickRain(this.rain, delta);
           tickGrain(this.grain, delta);
+          tickHints(this, this.hints, delta);
 
           if (
             this.triggered ||
@@ -3242,7 +3341,7 @@
             !this.puzzleOpen &&
             this.mousePuzzleSolved
           ) {
-            this.showPuzzlePrompt("[E]  Restore the circuit");
+            this.showPuzzlePrompt("[E]  Restore the circuit to open the door");
             if (this.puzzlePrompt) {
               this.puzzlePrompt.x = px - this.cameras.main.scrollX;
               this.puzzlePrompt.y = py - PLAYER_H - 22;
@@ -3559,6 +3658,11 @@
           mkBars(this, 600);
           this.grain = mkGrain(this, 560);
           this.touch = mkTouchControls(this, "E");
+
+          // Nudge toward the way forward (the descent) if the player stalls.
+          this.hints = mkHints(this, {
+            getTarget: () => ({ x: this.holeX, y: this.gY }),
+          });
 
           this.createPlayer();
 
@@ -4598,6 +4702,7 @@
           if (this.isDead) return;
           tickRain(this.rain, delta);
           tickGrain(this.grain, delta);
+          tickHints(this, this.hints, delta);
 
           this.arcTimer += delta;
           if (this.arcTimer > 160) {
@@ -5115,6 +5220,11 @@
           mkBars(this, 600);
           this.grain = mkGrain(this, 560);
           this.touch = mkTouchControls(this, "E");
+
+          // Nudge toward the next objective (generator or lever) if stuck.
+          this.hints = mkHints(this, {
+            getTarget: () => ({ x: this.getObjectiveX(), y: this.gY }),
+          });
 
           this.music = this.passedMusic;
           if (this.music && this.music.isPlaying) {
@@ -5693,6 +5803,16 @@
           }
         }
 
+        // ── Hint logic ──────────────────────────────────────────────────
+        // Where should the player head next? The nearest dormant generator,
+        // or, once all three are humming, the lever by the Heart.
+        getObjectiveX() {
+          if (!this.genA.active) return this.genA.x;
+          if (!this.genB.active) return this.genB.x;
+          if (!this.genC.active) return this.genC.x;
+          return this.heartX - 60;
+        }
+
         // Lightweight "failure" — brief flash + instant reset, no long death
         // sequence. Per spec: pits/shocks should teach, not punish.
         quickRespawn(message) {
@@ -5986,8 +6106,9 @@
                 this.time.delayedCall(2600, () => {
                   this.cameras.main.fade(2200, 0, 0, 0);
                   this.time.delayedCall(2200, () => {
-                    if (this.music) this.music.stop();
-                    this.scene.start("EndingScene");
+                    // Carry the music through to the ending so it keeps
+                    // playing over the final scene instead of cutting out.
+                    this.scene.start("EndingScene", { music: this.music });
                   });
                 });
               });
@@ -6036,6 +6157,10 @@
 
         update(time, delta) {
           tickGrain(this.grain, delta);
+
+          // Nudge toward the next objective if the player seems stuck.
+          if (!this.leverPulled) tickHints(this, this.hints, delta);
+          else hintClearArrow(this.hints);
 
           // Animate background gears once awakened
           this.bgGears.forEach((g) => {
@@ -6142,9 +6267,35 @@
           super({ key: "EndingScene" });
         }
 
+        init(data) {
+          this.passedMusic = data && data.music;
+        }
+
         create() {
           this.cameras.main.setBackgroundColor("#080c14");
           this.cameras.main.fadeIn(2000);
+
+          // Keep the music alive over the ending. If it was carried from the
+          // Heart Chamber, ease it up to a warm level; otherwise start fresh.
+          this.music = this.passedMusic;
+          if (this.music && this.music.isPlaying) {
+            this.tweens.add({
+              targets: this.music,
+              volume: 0.45,
+              duration: 3000,
+            });
+          } else if (this.cache.audio.exists("ambientOpening")) {
+            this.music = this.sound.add("ambientOpening", {
+              loop: true,
+              volume: 0,
+            });
+            this.music.play();
+            this.tweens.add({
+              targets: this.music,
+              volume: 0.45,
+              duration: 3000,
+            });
+          }
 
           this.add
             .image(0, 0, "sky")
@@ -6347,6 +6498,14 @@
                 });
                 this.input.keyboard.once("keydown-SPACE", () => {
                   this.cameras.main.fade(1100, 0, 0, 0);
+                  if (this.music) {
+                    this.tweens.add({
+                      targets: this.music,
+                      volume: 0,
+                      duration: 1100,
+                      onComplete: () => this.music.stop(),
+                    });
+                  }
                   this.time.delayedCall(1100, () =>
                     this.scene.start("SummaryScene"),
                   );
