@@ -278,8 +278,8 @@ Open the generated local URL in your browser and begin your journey.
 
 > Add gameplay screenshots here.
 
-Suggested screenshots:
-
+screenshots:
+coming...
 - The rainy outside world
 - The sleeping cat sequence
 - The toy mouse puzzle
