@@ -305,6 +305,12 @@
         const rightBtn = mkBtn(160, H - 90, R, "▶", "ArrowRight");
         const jumpBtn = mkBtn(W - 70, H - 160, R, "▲", "ArrowUp");
         const actionBtn = mkBtn(W - 160, H - 90, R + 6, "E", "KeyE");
+        // Secondary action button (e.g. "F" for the pond plate puzzle).
+        // Hidden until a scene calls showAction2(true). Sits to the left of
+        // the main action button so both E and F can be pressed at once.
+        const actionBtn2 = mkBtn(W - 250, H - 90, R, "F", "KeyF");
+        actionBtn2.g.setVisible(false);
+        actionBtn2.t.setVisible(false);
 
         // Allow scenes to relabel/retarget the action button contextually
         const setAction = (label, code) => {
@@ -322,6 +328,12 @@
           actionBtn.g.on("pointerout", release);
         };
 
+        // Show or hide the secondary (F) button on demand.
+        const showAction2 = (show) => {
+          actionBtn2.g.setVisible(show);
+          actionBtn2.t.setVisible(show);
+        };
+
         if (typeof actionLabel === "string") setAction(actionLabel, "KeyE");
 
         return {
@@ -329,14 +341,69 @@
           rightBtn,
           jumpBtn,
           actionBtn,
+          actionBtn2,
           setAction,
+          showAction2,
           destroy() {
-            [leftBtn, rightBtn, jumpBtn, actionBtn].forEach(({ g, t }) => {
-              g.destroy();
-              t.destroy();
-            });
+            [leftBtn, rightBtn, jumpBtn, actionBtn, actionBtn2].forEach(
+              ({ g, t }) => {
+                g.destroy();
+                t.destroy();
+              },
+            );
           },
         };
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // DEBUG / TEST WARP — jump straight to a scene or puzzle for testing.
+      // Add a ?scene= query param to the URL, e.g.:
+      //   index.html?scene=OutsideScene          → the rooftop puzzle
+      //   index.html?scene=CityScene             → the city (start)
+      //   index.html?scene=CityScene&warp=pond   → city, all plates in hand,
+      //                                             standing at the pond (F test)
+      //   index.html?scene=HeartChamberScene     → the final chamber
+      //   index.html?scene=EndingScene           → the ending
+      // Also, on a keyboard, press 1/2/3/4 anytime to hop between
+      // Outside / City / HeartChamber / Ending.
+      // ════════════════════════════════════════════════════════════════
+      function dbgParams() {
+        return new URLSearchParams(window.location.search);
+      }
+
+      function dbgStartScene() {
+        let s = dbgParams().get("scene");
+        return s && s.length ? s : null;
+      }
+
+      // Wire 1-4 hotkeys so any gameplay scene can warp on a keyboard.
+      function mkDebugHotkeys(scene) {
+        let map = {
+          "keydown-ONE": "OutsideScene",
+          "keydown-TWO": "CityScene",
+          "keydown-THREE": "HeartChamberScene",
+          "keydown-FOUR": "EndingScene",
+        };
+        Object.entries(map).forEach(([evt, key]) => {
+          scene.input.keyboard.on(evt, () => scene.scene.start(key));
+        });
+      }
+
+      // Apply any ?warp= setup once a scene's player exists.
+      function applyDebugWarp(scene) {
+        let warp = dbgParams().get("warp");
+        if (!warp) return;
+        if (scene.scene.key === "CityScene" && warp === "pond") {
+          // Hand over every plate and drop the player right at the pond
+          // so the [E] cycle / [F] place flow can be tested immediately.
+          scene.plates.rubber = true;
+          scene.plates.metal = true;
+          scene.plates.wood = true;
+          scene.p1Solved = true;
+          if (scene.updateInventory) scene.updateInventory();
+          scene.player.x = scene.pondX1 - 55;
+          scene.respawnX = scene.player.x;
+        }
       }
 
       // ════════════════════════════════════════════════════════════════
@@ -744,7 +811,9 @@
           });
 
           this.cameras.main.fade(500, 0, 0, 0);
-          this.time.delayedCall(600, () => this.scene.start("TitleScene"));
+          this.time.delayedCall(600, () =>
+            this.scene.start(dbgStartScene() || "TitleScene"),
+          );
         }
       }
 
@@ -986,6 +1055,9 @@
           this.hints = mkHints(this, {
             getTarget: () => ({ x: this.holeX, y: this.gY }),
           });
+
+          mkDebugHotkeys(this);
+          applyDebugWarp(this);
 
           this.cameras.main.fadeIn(2500);
 
@@ -3665,6 +3737,8 @@
           });
 
           this.createPlayer();
+          mkDebugHotkeys(this);
+          applyDebugWarp(this);
 
           this.cameras.main.setBounds(0, 0, this.worldW, H);
           this.cameras.main.startFollow(this.player, true, 0.06, 0.06);
@@ -4729,14 +4803,15 @@
           this.checkInteract();
           this.updatePrompt();
 
-          // Touch: switch the action button to "F" (place plate) when at
-          // the pond with a plate selected; otherwise it's "E" (interact).
-          if (this.touch) {
-            let wantF = this.nearPond && this.plateSelected;
-            if (wantF !== this._touchIsF) {
-              this._touchIsF = wantF;
-              if (wantF) this.touch.setAction("F", "KeyF");
-              else this.touch.setAction("E", "KeyE");
+          // Touch: at the pond, reveal the dedicated "F" button alongside the
+          // main "E" button so the player can both cycle (E) and place (F).
+          // The main button always stays "E".
+          if (this.touch && this.touch.showAction2) {
+            let showF =
+              this.nearPond && this.plateOrder.some((t) => this.plates[t]);
+            if (showF !== this._touchIsF) {
+              this._touchIsF = showF;
+              this.touch.showAction2(showF);
             }
           }
         }
@@ -5225,6 +5300,9 @@
           this.hints = mkHints(this, {
             getTarget: () => ({ x: this.getObjectiveX(), y: this.gY }),
           });
+
+          mkDebugHotkeys(this);
+          applyDebugWarp(this);
 
           this.music = this.passedMusic;
           if (this.music && this.music.isPlaying) {
