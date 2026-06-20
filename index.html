@@ -16,12 +16,21 @@
         padding: 0;
         box-sizing: border-box;
       }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+      }
       body {
         background: #000;
         display: flex;
         justify-content: center;
         align-items: center;
+        /* 100vh on mobile includes the address bar, which pushes the bottom
+           buttons off-screen. Use the dynamic viewport height where supported
+           so the canvas matches the *visible* area. */
         height: 100vh;
+        height: 100dvh;
         overflow: hidden;
         touch-action: none;
       }
@@ -226,6 +235,14 @@
       // scene works unchanged (ArrowLeft/Right/Up, E, F).
       // ════════════════════════════════════════════════════════════════
       function isTouchDevice() {
+        // ?touch=1 forces the on-screen buttons on (handy for testing in a
+        // desktop browser's mobile view, where touch isn't reported);
+        // ?touch=0 forces them off.
+        try {
+          let t = new URLSearchParams(window.location.search).get("touch");
+          if (t === "1") return true;
+          if (t === "0") return false;
+        } catch (e) {}
         return (
           "ontouchstart" in window ||
           navigator.maxTouchPoints > 0 ||
@@ -301,14 +318,17 @@
         };
 
         const R = 38;
-        const leftBtn = mkBtn(70, H - 90, R, "◀", "ArrowLeft");
-        const rightBtn = mkBtn(160, H - 90, R, "▶", "ArrowRight");
-        const jumpBtn = mkBtn(W - 70, H - 160, R, "▲", "ArrowUp");
-        const actionBtn = mkBtn(W - 160, H - 90, R + 6, "E", "KeyE");
+        // Bottom row is lifted off the very edge so the phone browser's own
+        // bottom toolbar doesn't overlap and swallow the taps.
+        const BY = H - 118;
+        const leftBtn = mkBtn(74, BY, R, "◀", "ArrowLeft");
+        const rightBtn = mkBtn(166, BY, R, "▶", "ArrowRight");
+        const jumpBtn = mkBtn(W - 74, BY - 96, R, "▲", "ArrowUp");
+        const actionBtn = mkBtn(W - 166, BY, R + 6, "E", "KeyE");
         // Secondary action button (e.g. "F" for the pond plate puzzle).
         // Hidden until a scene calls showAction2(true). Sits to the left of
         // the main action button so both E and F can be pressed at once.
-        const actionBtn2 = mkBtn(W - 250, H - 90, R, "F", "KeyF");
+        const actionBtn2 = mkBtn(W - 262, BY, R, "F", "KeyF");
         actionBtn2.g.setVisible(false);
         actionBtn2.t.setVisible(false);
 
@@ -6773,6 +6793,15 @@
           SummaryScene,
         ],
       });
+
+      // Re-fit the canvas when the mobile address bar shows/hides or the
+      // device rotates, so the whole playfield (and the touch buttons at the
+      // bottom) always stays inside the visible viewport.
+      const refit = () => window.game && window.game.scale.refresh();
+      window.addEventListener("resize", refit);
+      window.addEventListener("orientationchange", () =>
+        setTimeout(refit, 200),
+      );
     </script>
   </body>
 </html>
