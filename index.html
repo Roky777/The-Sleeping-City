@@ -6802,14 +6802,24 @@
         ],
       });
 
-      // Re-fit the canvas when the mobile address bar shows/hides or the
-      // device rotates, so the whole playfield (and the touch buttons at the
-      // bottom) always stays inside the visible viewport.
-      const refit = () => window.game && window.game.scale.refresh();
-      window.addEventListener("resize", refit);
+      // Size the game container to the EXACT visible height (window.innerHeight
+      // already excludes Chrome's address bar / toolbars), then tell Phaser to
+      // re-fit. This is more reliable across mobile browsers than CSS dvh alone,
+      // and keeps the playfield + bottom buttons inside the visible viewport
+      // when the address bar shows/hides or the device rotates.
+      const sizeGame = () => {
+        const el = document.getElementById("game");
+        if (el) el.style.height = window.innerHeight + "px";
+        if (window.game && window.game.scale) window.game.scale.refresh();
+      };
+      sizeGame();
+      window.addEventListener("resize", sizeGame);
       window.addEventListener("orientationchange", () =>
-        setTimeout(refit, 200),
+        setTimeout(sizeGame, 250),
       );
+      // A couple of delayed passes catch the address bar settling after load.
+      setTimeout(sizeGame, 300);
+      setTimeout(sizeGame, 1000);
     </script>
   </body>
 </html>
