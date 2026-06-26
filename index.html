@@ -23,16 +23,20 @@
       }
       body {
         background: #000;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        /* 100vh on mobile includes the address bar, which pushes the bottom
-           buttons off-screen. Use the dynamic viewport height where supported
-           so the canvas matches the *visible* area. */
+        overflow: hidden;
+        touch-action: none;
+      }
+      /* Dedicated full-viewport parent for the Phaser canvas. Using a flex
+         container on <body> collapses Phaser's parent and makes FIT scale to
+         a tiny size, so we give it an explicit fixed full-screen box instead.
+         100dvh matches the *visible* area on mobile (excludes the URL bar). */
+      #game {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
         height: 100vh;
         height: 100dvh;
         overflow: hidden;
-        touch-action: none;
       }
       canvas {
         display: block;
@@ -63,6 +67,7 @@
     <div id="rotate-overlay">
       Rotate your device to landscape to play The Sleeping City.
     </div>
+    <div id="game"></div>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
 
     <script>
@@ -6778,8 +6783,11 @@
           activePointers: 3,
         },
         scale: {
+          parent: "game",
           mode: Phaser.Scale.FIT,
           autoCenter: Phaser.Scale.CENTER_BOTH,
+          width: W,
+          height: H,
         },
         scene: [
           PreloadScene,
